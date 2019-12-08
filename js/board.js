@@ -160,7 +160,8 @@ var BOARD = function board_init(el, options)
     {
         var fen_pieces = pos.match(/^\S+/),
             rank = 7,
-            file = 0;
+            file = 0,
+            id = 0;
         
         ///TODO: Delete old pieces.
         pieces = [];
@@ -190,8 +191,10 @@ var BOARD = function board_init(el, options)
                 }
                 piece.rank = rank;
                 piece.file = file;
+                piece.id = id;
                 pieces[pieces.length] = piece;
                 file += 1;
+                id += 1;
             }
         });
     }
@@ -286,7 +289,7 @@ var BOARD = function board_init(el, options)
         }
     }
     
-    function report_move(move, is_promoting)
+    function report_move(uci, promoting, cb)
     {
         /// We make it async because of promotion.
         function record()
@@ -296,16 +299,46 @@ var BOARD = function board_init(el, options)
             delete board.legal_moves;
             
             if (board.mode === "play" && board.onmove) {
-                board.onmove(move);
+                board.onmove(uci);
+            }
+            
+            if (cb) {
+                cb(uci)
             }
         }
         
-        if (is_promoting) {
+        if (promoting) {
             ///TODO: Ask...
-            move += "q"; /// For now, defaulting to queen.
+            //move += "q"; /// For now, defaulting to queen.
             setTimeout(record, 10);
         } else {
             setTimeout(record, 10);
+        }
+    }
+    
+    function set_piece_pos(piece, square)
+    {
+        piece.el.style.top = -(square.rank * 100) + "%";
+        piece.el.style.bottom = (square.rank * 100) + "%";
+        
+        piece.el.style.left = (square.file * 100) + "%";
+        piece.el.style.right = -(square.file * 100) + "%";
+    }
+    
+    function get_san(uci)
+    {
+        if (!board.legal_moves) {
+            return;
+        }
+        
+        return board.legal_moves.san[board.legal_moves.uci.indexOf(uci)];
+    }
+    
+    function promote_piece(piece, uci)
+    {
+        if (uci.length === 5 && /[qrbn]/.test(uci[4])) {
+            piece.type = uci[4];
+            piece.el.style.backgroundImage = get_piece_img(piece);
         }
     }
     
@@ -313,68 +346,92 @@ var BOARD = function board_init(el, options)
     {
         var captured_piece,
             rook,
-            san,
-            rook_rank = board.turn === "w" ? 0 : 7;
+            san = get_san(uci),
+            rook_rank = board.turn === "w" ? 0 : 7; ///TODO: Use board_details.ranks
         
-        square.el.appendChild(piece.el);
+        set_piece_pos(piece, square);
         
-        ///FIXME: This won't get en passant.
+        ///NOTE: This does not find en passant captures. See below.
         captured_piece = get_piece_from_rank_file(square.rank, square.file);
         
-        if (captured_piece) {
-            capture(captured_piece);
-        }
-        
-        /// Is it castling?
-        if (board.legal_moves) {
-            san = board.legal_moves.san[board.legal_moves.uci.indexOf(uci)];
-        }
-        if (san === "O-O") { /// Kingside castle
-            rook = get_piece_from_rank_file(rook_rank, 7);
-            squares[rook_rank][5].appendChild(rook.el);
-            rook.file = 5;
-        } else if (san === "O-O-O") { /// Queenside castle
-            rook = get_piece_from_rank_file(rook_rank, 0);
-            squares[rook_rank][3].appendChild(rook.el);
-            rook.file = 3;
+        if (board.mode === "play") {
+            /// En passant
+            if (!captured_piece && piece.type === "p" && piece.file !== square.file && ((piece.color === "w" && square.rank === board_details.ranks - 3) || (piece.color === "b" && square.rank === 2))) {
+                captured_piece = get_piece_from_rank_file(piece.rank, square.file);
+            }
+            
+            if (captured_piece && captured_piece.id !== piece.id) {
+                capture(captured_piece);
+            }
+            
+            /// Is it castling?
+            ///TODO: Use board_details.files
+            if (san === "O-O") { /// Kingside castle
+                rook = get_piece_from_rank_file(rook_rank, 7);
+                set_piece_pos(rook, {rank: rook_rank, file: 5});
+                rook.file = 5;
+            } else if (san === "O-O-O") { /// Queenside castle
+                rook = get_piece_from_rank_file(rook_rank, 0);
+                set_piece_pos(rook, {rank: rook_rank, file: 3});
+                rook.file = 3;
+            }
         }
         
         /// Make sure to change the rank and file after checking for a capured piece so that you don't capture yourself.
         piece.rank = square.rank;
         piece.file = square.file;
-        
-        ///TODO: Promotion
     }
     
     function is_promoting(piece, square)
     {
-        return piece.type === "p" && square.rank % board_details.ranks - 1 === 0;
+        if (!piece || !square) {
+            return;
+        }
+        
+        return piece.type === "p" && square.rank % (board_details.ranks - 1) === 0;
     }
     
     function onmouseup(e)
     {
         var square,
-            uci;
+            uci,
+            promoting,
+            piece_storage;
         
         if (board.dragging && board.dragging.piece) {
-            ///TODO: Move it
             square = get_hovering_square(e);
+            promoting = is_promoting(board.dragging.piece, square);
             
             uci = get_move(board.dragging.piece, square);
             
+            if (promoting) {
+                uci += "q"; /// We just add something to make sure it's a legal move. We'll ask the user later what he actually wants to promote to.
+            }
+            
             if (square && (board.mode === "setup" || is_legal_move(uci))) {
+                piece_storage = board.dragging.piece;
                 move_piece(board.dragging.piece, square, uci);
-                report_move(uci, is_promoting(board.dragging.piece, square));
+                report_move(uci, promoting, function onreport(finalized_uci)
+                {
+                    ///NOTE: Since this is async, we need to store which piece was moved.
+                    promote_piece(piece_storage, finalized_uci);
+                });
             } else {
                 /// Snap back.
                 ///TODO: Be able to remove pieces in setup mode.
             }
+            
             prefix_css(board.dragging.piece.el, "transform", "none");
             board.dragging.piece.el.classList.remove("dragging");
             board.el.classList.remove("dragging");
             
             delete board.dragging;
         }
+    }
+    
+    function get_piece_img(piece)
+    {
+        return "url(\"" + encodeURI("img/pieces/" + board.theme + "/" + piece.color + piece.type + (board.theme_ext || ".svg")) + "\")";
     }
     
     function set_board()
@@ -388,12 +445,14 @@ var BOARD = function board_init(el, options)
                 
                 piece.el.classList.add("piece");
                 
-                piece.el.style.backgroundImage = "url(\"" + encodeURI("img/pieces/" + board.theme + "/" + piece.color + piece.type + (board.theme_ext || ".svg")) + "\")";
+                piece.el.style.backgroundImage = get_piece_img(piece)
                 
                 add_piece_events(piece);
             }
             
-            squares[piece.rank][piece.file].appendChild(piece.el);
+            /// We just put them all in the bottom left corner and more the position.
+            squares[0][0].appendChild(piece.el);
+            set_piece_pos(piece, {rank: piece.rank, file: piece.file});
         });
     }
     
@@ -468,6 +527,7 @@ var BOARD = function board_init(el, options)
         piece = get_piece_from_rank_file(positions.starting.rank, positions.starting.file);
         
         move_piece(piece, ending_square, uci);
+        promote_piece(piece, uci);
     }
     
     function move(uci)
@@ -491,7 +551,7 @@ var BOARD = function board_init(el, options)
             b: {
                 type: "ai",
             }
-        }
+        },
     /// moves: []
     /// legal_move[]
     /// onmove()

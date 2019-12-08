@@ -49,7 +49,7 @@
             
             cur_message += line;
             
-            /// Try to determine if the steam is done.
+            /// Try to determine if the stream is done.
             if (line === "uciok") {
                 /// uci
                 done = true;
@@ -61,7 +61,7 @@
             } else if (line.substr(0, 8) === "bestmove") {
                 /// go [...]
                 done = true;
-                /// All go needs in the last line (use stream to get more)
+                /// All "go" needs is the last line (use stream to get more)
                 cur_message = line;
             } else if (que[0].cmd === "d" && line.substr(0, 15) === "Legal uci moves") {
                 done = true;
@@ -73,11 +73,14 @@
             ///NOTE: Stockfish.js does not support the "debug" or "register" commands.
             ///TODO: Add support for "perft", "bench", and "key" commands.
             ///TODO: Get welcome message so that it does not get caught with other messages.
+            ///TODO: Prevent (or handle) multiple messages from different commands
+            ///      E.g., "go depth 20" followed later by "uci"
             
             if (done) {
                 if (que[0].cb) {
                     que[0].cb(cur_message);
                 }
+                cur_message = "";
                 /// Remove this from the que.
                 que.shift();
             }
@@ -131,7 +134,7 @@
                 res;
             
             if (!san || !uci || !checkers) {
-                error("Invalid d response: " + str);
+                error("Invalid d response: \n" + str);
             }
             
             res = {
@@ -166,10 +169,11 @@
                     cb();
                 }
             } else {
+                board.legal_moves = [];
                 if (board.mode === "play") {
                     /// Was it checkmate?
                     if (moves.checkers.length) {
-                        alert("Checkmate!");
+                        alert((board.turn === "b" ? "Black" : "White") + " was Checkmated!");
                     } else {
                         alert("Stalemate!");
                     }
@@ -181,7 +185,6 @@
     
     function onengine_move(str)
     {
-        //console.log("done: " + str);
         var res = str.match(/^bestmove\s(\S+)(?:\sponder\s(\S+))?/)
         
         if (!res) {
@@ -206,15 +209,10 @@
     function set_ai_position()
     {
         engine.send("position startpos moves " + board.moves.join(" "));
-        
-        ///NOTE: We need to get legal moves because we need to know if a move is castling or not.
-        set_legal_moves();
     }
     
     function tell_engine_to_move()
     {
-        set_ai_position();
-        
         //uciCmd("go " + (time.depth ? "depth " + time.depth : "") + " wtime " + time.wtime + " winc " + time.winc + " btime " + time.btime + " binc " + time.binc);
         /// Without time, it thinks really fast.
         engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 100000 btime 100000" , onengine_move, onthinking);
@@ -224,8 +222,15 @@
     {
         board.moves.push(move);
         
-        ///TODO: Determine if AI or human is playing.
-        tell_engine_to_move();
+        set_ai_position();
+        
+        ///NOTE: We need to get legal moves (even for AI) because we need to know if a move is castling or not.
+        set_legal_moves(function ()
+        {
+            if (board.players[board.turn].type === "ai") {
+                tell_engine_to_move();
+            }
+        });
     }
     
     function start_new_game()
@@ -243,16 +248,16 @@
     
     function init()
     {
+        onresize();
+        
+        window.addEventListener("resize", onresize);
+        
         loading_el = document.createElement("div");
         
         loading_el.textContent = "Loading...";
         loading_el.classList.add("loading");
         
         document.documentElement.appendChild(loading_el);
-        
-        onresize();
-        
-        window.addEventListener("resize", onresize);
         
         board.wait();
         
@@ -263,7 +268,6 @@
         
         engine.send("uci", function onuci(str)
         {
-            //console.log(str);
             engine.send("isready", function onready()
             {
                 console.log("ready");
