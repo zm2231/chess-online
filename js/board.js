@@ -13,10 +13,13 @@ var BOARD = function board_init(el, options)
         hover_squares,
         pos,
         colors = ["blue", "red", "green", "yellow", "teal", "orange", "purple", "pink"],
+        ///NOTE: These should match the CSS.
+        rgba   = ["rgba(0, 0, 240, .6)", "rgba(240, 0, 0, .6)", "rgba(0, 240, 0, .6)", "rgba(240, 240, 0, .6)", "rgba(0, 240, 240, .6)", "rgba(240, 120, 0, .6)", "rgba(120, 0, 120, .6)", "rgba(240, 0, 240, .6)"],
         cur_color = 0,
         capturing_clicks,
         legal_moves,
-        arrow_manager;
+        arrow_manager,
+        dragging_arrow = {};
     
     function num_to_alpha(num)
     {
@@ -119,23 +122,68 @@ var BOARD = function board_init(el, options)
                 square;
             
             if (e.ctrlKey) {
-                /// Highlight the sqaure.
-                new_color = colors[cur_color];
-                if (is_left_click(e)) {
-                    if (hover_squares[y][x].highlight_color === new_color) {
-                        remove_highlight(x, y);
+                if (!dragging_arrow.drew_arrow) {
+                    /// Highlight the sqaure.
+                    new_color = colors[cur_color];
+                    if (is_left_click(e)) {
+                        if (hover_squares[y][x].highlight_color === new_color) {
+                            remove_highlight(x, y);
+                        } else {
+                            highlight_square(x, y, new_color);
+                        }
                     } else {
-                        highlight_square(x, y, new_color);
+                        remove_highlight(x, y);
+                        e.preventDefault();
                     }
-                } else {
-                    remove_highlight(x, y);
-                    e.preventDefault();
                 }
             } else if (board.clicked_piece) {
                 ///TODO: Make sure the move is valid.
                 /// Move to the square.
                 square = {rank: y, file: x};
                 make_move(board.clicked_piece.piece, square, get_move(board.clicked_piece.piece, square), is_promoting(board.clicked_piece.piece, square));
+            }
+        };
+    }
+    
+    function arrow_start_maker(rank, file)
+    {
+        return function (e)
+        {
+            dragging_arrow.drew_arrow = false;
+            dragging_arrow.start_square = {rank: rank, file: file};
+        };
+    }
+    
+    function arrow_move_maker(rank, file)
+    {
+        function finish_arrow()
+        {
+            delete dragging_arrow.start_square;
+            delete dragging_arrow.cur_square;
+            delete dragging_arrow.number;
+        }
+        
+        return function (e)
+        {
+            if (dragging_arrow.start_square) {
+                if (G.normalize_mouse_buttons(e) === 1) {
+                    if (!dragging_arrow.cur_square || rank !== dragging_arrow.cur_square.rank || file !== dragging_arrow.cur_square.file) {
+                        if (typeof dragging_arrow.number === "number") {
+                            arrow_manager.delete_arrow(dragging_arrow.number);
+                            delete dragging_arrow.cur_square;
+                        }
+                        if (dragging_arrow.start_square.rank !== rank || dragging_arrow.start_square.file !== file) {
+                            dragging_arrow.number = arrow_manager.draw(dragging_arrow.start_square.rank, dragging_arrow.start_square.file, rank, file, rgba[cur_color])
+                            dragging_arrow.cur_square = {rank: rank, file: file};
+                            dragging_arrow.drew_arrow = true;
+                        }
+                    }
+                    if (e.type === "mouseup") {
+                        finish_arrow();
+                    }
+                } else {
+                    finish_arrow();
+                }
             }
         };
     }
@@ -149,6 +197,10 @@ var BOARD = function board_init(el, options)
         el.classList.add("file" + x);
         
         el.addEventListener("click", hover_square_click_maker(x, y));
+        
+        el.addEventListener("mousedown", arrow_start_maker(y, x));
+        el.addEventListener("mousemove", arrow_move_maker(y, x));
+        el.addEventListener("mouseup", arrow_move_maker(y, x));
         
         return el;
     }
@@ -766,18 +818,6 @@ var BOARD = function board_init(el, options)
             
             if (square && (board.mode === "setup" || is_legal_move(uci))) {
                 make_move(board.dragging.piece, square, uci, promoting);
-                /*
-                clear_board_extras();
-                //clear_focuses();
-                //clear_dots();
-                piece_storage = board.dragging.piece;
-                move_piece(board.dragging.piece, square, uci);
-                report_move(uci, promoting, board.dragging.piece, function onreport(finalized_uci)
-                {
-                    ///NOTE: Since this is async, we need to store which piece was moved.
-                    promote_piece(piece_storage, finalized_uci);
-                });
-                */
             } else {
                 /// Snap back.
                 if (board.mode === "setup") {
@@ -945,6 +985,8 @@ var BOARD = function board_init(el, options)
     
     function onkeydown(e)
     {
+        var target = e.target || e.srcElement || e.originalTarget;
+        
         if (e.ctrlKey) {
             board.el.classList.add("catchClicks");
             capturing_clicks = true;
@@ -960,7 +1002,13 @@ var BOARD = function board_init(el, options)
                 }
             } else if (e.keyCode === 32) { /// Space
                 clear_highlights();
+                arrow_manager.clear(true); /// Only clear lines drawn by the user.
             }
+        }
+        
+        if (e.keyCode === 8 && (!target || target.tagName === "BODY")) { /// backspace
+            arrow_manager.delete_arrow();
+            e.preventDefault();
         }
     }
     
@@ -1179,12 +1227,8 @@ var BOARD = function board_init(el, options)
             legal_moves.checkers.forEach(function (checker)
             {
                 var checker_data = get_rank_file_from_str(checker);
-                //draw_arrow(uci_data.starting.rank, uci_data.starting.file, uci_data.ending.rank, uci_data.ending.file, "rgba(0, 0, 240, .6)");
-                //console.log(checker_data)
-                //arrow_manager.draw()
-                arrow_manager.draw(checker_data.rank, checker_data.file, king.rank, king.file, "rgba(240, 0, 0, .6)");
+                arrow_manager.draw(checker_data.rank, checker_data.file, king.rank, king.file, rgba[1], true);
             });
-            //console.log(king)
         }
         
         ///NOTE: This will clear the checked king square if there is no checked king, so it must always be called.
@@ -1272,7 +1316,7 @@ var BOARD = function board_init(el, options)
             ctx.fill();
         }
         
-        function draw_arrow(rank1, file1, rank2, file2, color, do_not_add)
+        function draw_arrow(rank1, file1, rank2, file2, color, auto, do_not_add)
         {
             var box1 = squares[rank1][file1].getBoundingClientRect(),
                 box2 = squares[rank2][file2].getBoundingClientRect(),
@@ -1286,6 +1330,7 @@ var BOARD = function board_init(el, options)
                     rank2: rank2,
                     file2: file2,
                     color: color,
+                    auto: auto,
                 });
             }
             
@@ -1303,18 +1348,16 @@ var BOARD = function board_init(el, options)
                             fillStyle: color,
                             width:    box1.width / 5,
                             head_len: box1.width / 1.5,
-                            /*
-                            lineWidth: box1.width / 10,
-                            strokeStyle: "rgba(200,200,200,.4)",
-                            */
+                         ///lineWidth: box1.width / 10,
+                         ///strokeStyle: "rgba(200,200,200,.4)",
                          });
+            
+            return arrows.length - 1;
         }
         
-        function clear()
+        function remove_if_empty()
         {
-            arrows = [];
-            set_size();
-            if (on_dom) {
+            if (on_dom && !arrows.length) {
                 if (canvas.parentNode) {
                     canvas.parentNode.removeChild(canvas);
                 }
@@ -1322,11 +1365,34 @@ var BOARD = function board_init(el, options)
             }
         }
         
+        function clear(keep_auto_arrows)
+        {
+            var i;
+            
+            /// Sometimes, we don't want to remove the arrows for last move and checkers.
+            if (keep_auto_arrows) {
+                for (i = arrows.length - 1; i >= 0; i -= 1) {
+                    if (!arrows[i].auto) {
+                        G.array_remove(arrows, i);
+                    }
+                }
+            } else {
+                arrows = [];
+            }
+            set_size();
+            
+            if (arrows.length) {
+                draw_all_arrows();
+            } else {
+                remove_if_empty();
+            }
+        }
+        
         function draw_all_arrows()
         {
             arrows.forEach(function (arrow)
             {
-                draw_arrow(arrow.rank1, arrow.file1, arrow.rank2, arrow.file2, arrow.color, true);
+                draw_arrow(arrow.rank1, arrow.file1, arrow.rank2, arrow.file2, arrow.color, arrow.auto, true);
             });
         }
         
@@ -1351,22 +1417,37 @@ var BOARD = function board_init(el, options)
         {
             if (!which) {
                 which = arrows.length - 1;
+                for (;;) {
+                    /// We are looking for the last arrow drawn by the user.
+                    if (arrows[which] && !arrows[which].auto) {
+                        break;
+                    }
+                    
+                    which -= 1;
+                    
+                    if (which < 0) {
+                        return;
+                    }
+                }
             }
+            
             if (arrows[which]) {
                 G.array_remove(arrows, which);
                 redraw();
             }
+            
+            remove_if_empty();
         }
         
         function arrow_onmove(e)
         {
             var uci_data = split_uci(e.uci);
-            draw_arrow(uci_data.starting.rank, uci_data.starting.file, uci_data.ending.rank, uci_data.ending.file, "rgba(0, 0, 240, .6)");
+            draw_arrow(uci_data.starting.rank, uci_data.starting.file, uci_data.ending.rank, uci_data.ending.file, rgba[0], true);
         }
         
-        function draw(rank1, file1, rank2, file2, color)
+        function draw(rank1, file1, rank2, file2, color, auto)
         {
-            draw_arrow(rank1, file1, rank2, file2, color)
+            return draw_arrow(rank1, file1, rank2, file2, color, auto);
         }
         
         G.events.attach("board_resize", redraw);

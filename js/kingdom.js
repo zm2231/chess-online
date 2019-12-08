@@ -22,7 +22,7 @@
         legal_move_engine,
         cur_pos_cmd,
         game_history,
-        eval_depth = 6;
+        eval_depth = 8;
     
     function error(str)
     {
@@ -440,30 +440,36 @@
     {
         game_history[ply].pos = pos;
         
-        setTimeout(eval_next, 0);
+        setTimeout(eval_stack, 0);
     }
     
-    function eval_next()
+    function eval_stack()
     {
-        var i,
-            len = game_history.length;
+        var i;
         
-        for (i = 0; i < len; i += 1) {
+        for (i = game_history.length - 1; i >= 0; i -= 1) {
             if (!game_history[i].evaled) {
                 return eval_pos(i);
             }
         }
     }
     
-    G.events.attach("evaled", eval_next);
+    G.events.attach("evaled", eval_stack);
     
     function eval_pos(ply)
     {
+        /// If we are in the middle of an eval, stop it and do the latest one.
         if (evaler.busy) {
-            return;
+            if (evaler.cur_ply === ply) {
+                return;
+            }
+            evaler.stop = true;
+            return evaler.send("stop");
         }
         
+        evaler.stop = false;
         evaler.busy = true;
+        evaler.cur_ply = ply;
         
         evaler.send(game_history[ply].pos);
         
@@ -471,12 +477,14 @@
         {
             var matches = str.match(/^bestmove\s(\S+)(?:\sponder\s(\S+))?/);
             
-            if (matches) {
-                game_history[ply].eval_best_move = matches[1];
-                game_history[ply].eval_ponder = matches[2];
+            if (game_history[ply] && !evaler.stop) {
+                if (matches) {
+                    game_history[ply].eval_best_move = matches[1];
+                    game_history[ply].eval_ponder = matches[2];
+                }
+                
+                game_history[ply].evaled = true;
             }
-            
-            game_history[ply].evaled = true;
             evaler.busy = false;
             G.events.trigger("evaled", {ply: ply});
         }, function stream(str)
@@ -488,30 +496,33 @@
                 pv,
                 data;
             
-            if (matches) {
-                depth = Number(matches[1]);
-                type = matches[2];
-                score = Number(matches[3]);
-                pv = matches[4].split(" ");
-                
-                /// Convert the relative score to an absolute score.
-                if (game_history[ply].turn === "b") {
-                    score *= -1;
-                }
-                
-                game_history[ply].eval_score = score;
-                game_history[ply].eval_type = type;
-                game_history[ply].eval_depth = depth;
-                game_history[ply].eval_pv = pv;
-                
-                data = {score: score, type: type, depth: depth, pv: pv};
-                //G.events.trigger("eval", {ply: ply, , turn: game_history[ply].turn});
-            } else {
-                if (/score mate 0\b/.test(str)) {
-                    game_history[ply].eval_score = 0;
-                    game_history[ply].eval_type = "mate";
-                    game_history[ply].eval_depth = 0;
-                    data = {score: 0, type: "mate", depth: 0};
+            /// Are we still supposed to be evaling?
+            ///NOTE: When a new game starts, the game_history array will be empty.
+            if (game_history[ply]) {
+                if (matches) {
+                    depth = Number(matches[1]);
+                    type = matches[2];
+                    score = Number(matches[3]);
+                    pv = matches[4].split(" ");
+                    
+                    /// Convert the relative score to an absolute score.
+                    if (game_history[ply].turn === "b") {
+                        score *= -1;
+                    }
+                    
+                    game_history[ply].eval_score = score;
+                    game_history[ply].eval_type = type;
+                    game_history[ply].eval_depth = depth;
+                    game_history[ply].eval_pv = pv;
+                    
+                    data = {score: score, type: type, depth: depth, pv: pv};
+                } else {
+                    if (/score mate 0\b/.test(str)) {
+                        game_history[ply].eval_score = 0;
+                        game_history[ply].eval_type = "mate";
+                        game_history[ply].eval_depth = 0;
+                        data = {score: 0, type: "mate", depth: 0};
+                    }
                 }
             }
             
@@ -864,6 +875,9 @@
         
         stop_game();
         
+        game_history = [];
+        
+        evaler.send("stop");
         evaler.send("ucinewgame");
         
         if (board.players.w.type === "ai") {
@@ -1358,23 +1372,7 @@
         
         board.onmove = on_human_move;
         
-        //engine = load_engine();
         evaler = load_engine();
-        
-        evaler.stream = function (line)
-        {
-            /*
-            if (line.substr(0, 4) === "info") {
-                player1_el.textContent = line;
-            }
-            */
-            if (debugging) {
-                console.log(line);
-            }
-        }
-        
-        //board.players.b.type = "human";
-        //board.players.w.type = "ai";
         
         evaler.send("uci", function onuci(str)
         {
@@ -1556,7 +1554,6 @@
             clock_els[color].textContent = format_time(board.players[color].time);
         }
         
-    
         function reset_clock(color)
         {
             var player = board.players[color];
@@ -1570,14 +1567,14 @@
         {
             reset_clock("w");
             reset_clock("b");
-        }
+        };
         
         board.onswitch = function onswitch()
         {
             if (timer_on) {
                 tick(board.turn === "w" ? "b" : "w");
             }
-        }
+        };
         
         board.el.parentNode.insertBefore(clock_els.w, board.el);
         board.el.parentNode.insertBefore(clock_els.b, board.el.nextSibling);
@@ -1595,7 +1592,7 @@
             if (clock_els[color]) {
                 clock_els[color].textContent = "--";
             }
-        }
+        };
         
         clock_manager.start_timer = start_timer;
         clock_manager.stop_timer = stop_timer;
@@ -1611,45 +1608,22 @@
         
         function calculate_slope()
         {
-            /// m = change in y-value (y2-y1)
-            ///     change in x-value (x2-x1)
+            /// m = change in y-value (y2 - y1)
+            ///     change in x-value (x2 - x1)
             obj.m = (100 - 0) / (obj.min - obj.max);
         }
         
         calculate_slope();
         
-        //board.el.appendChild(container);
         obj.resize = function ()
         {
             var board_rect = board.el.getBoundingClientRect();
-            //console.log(board_rect)
-            //debugger;
             container.style.top = board_rect.top + "px";
             container.style.bottom = (window.innerHeight - board_rect.bottom) + "px";
             container.style.right = (window.innerWidth - board_rect.left) + "px";
             container.style.left = (board_rect.left - (board_rect.width / 16)) + "px";
-            //console.log(board_rect.width)
         };
         
-        /// max =   0%
-        /// 0   =  50%
-        /// min = 100%
-        /// y=mx+b
-        /// b = 50
-        /// 
-        ///  10 = 0
-        ///   0 = 50
-        /// -10 = 100
-        
-
-        ///
-        
-        ///   10,0
-        ///   0,50
-        /// -10,100
-        ///
-        /// 100 - 0
-        /// -10 - 10
         obj.set_eval = function (value)
         {
             obj.value = Number(value);
@@ -1659,22 +1633,15 @@
         /// Set default.
         obj.set_eval(obj.value);
         
-        /*
-        setTimeout(function ()
-        {
-            obj.set_eval(5);
-        }, 3000);
-        */
-        
         container.appendChild(slider_el);
         board.el.parentNode.insertBefore(container, board.el);
-        
     
         G.events.attach("eval", function oneval(e)
         {
             if (debugging) {
                 console.log(e)
             }
+            
             /// Is this eval for the current position?
             if (e.ply === game_history.length - 1) {
                 if (e.type === "cp") {
@@ -1687,8 +1654,6 @@
                     }
                 }
             }
-            //{ply: ply, score: score, type: type, depth: depth, pv: pv});
-            //if (
         });
         
         return obj;
