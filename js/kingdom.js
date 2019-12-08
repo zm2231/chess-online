@@ -17,7 +17,7 @@
         clock_manager,
         pieces_moved,
         startpos,
-        debugging;
+        debugging = true;
     
     function array_remove(arr, i, order_irrelevant)
     {
@@ -67,7 +67,7 @@
     function load_engine()
     {
         var worker = new Worker("js/stockfish.js"),
-            engine = {},
+            engine = {started: Date.now()},
             que = [];
         
         function get_first_word(line)
@@ -691,11 +691,13 @@
         new_game_el.textContent = "Start Game";
         setup_game_el.disabled = true;
         hide_loading(true);
+        G.events.trigger("initSetup");
     }
     
     function start_new_game()
     {
-        var dont_reset = board.mode === "setup";
+        var dont_reset = board.mode === "setup",
+            stop_new_game;
         
         show_loading();
         
@@ -707,6 +709,12 @@
         }
         
         starting_new_game = true;
+        
+        /// Stop loading a new game if the user clicks on setup.
+        G.events.attach("initSetup", function ()
+        {
+            stop_new_game = true;
+        }, true);
         
         stop_game();
         
@@ -721,7 +729,7 @@
         
         all_flushed(function start_game()
         {
-            if (board.mode !== "wait") {
+            if (stop_new_game) {
                 starting_new_game = false;
                 return;
             }
@@ -732,10 +740,14 @@
                 board.turn = "w";
                 board.set_board(startpos);
                 startpos = "fen " + startpos;
-            } else {
-                if (board.messy) {
-                    board.set_board();
+                ///TODO: Get move count.
+                /*
+                if (move_count > 0) {
+                    board.messy = true;
                 }
+                */
+            } else {
+                board.set_board();
                 startpos = "startpos";
             }
             
@@ -748,7 +760,7 @@
             //board.moves = "e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4 e5d4 e1g1 f6e4 f1e1 d7d5 c4d5 d8d5 b1c3 d5c4 c3e4 c8e6 b2b3 c4d5 c1g5 f8b4 c2c3 f7f5 e4d6 b4d6 c3c4 d5c5 d1e2 e8g8 e2e6 g8h8 a1d1 f5f4 e1e4 c5a5 e4e2 a5f5 e6f5 f8f5 g5h4 a8f8 d1d3 h7h6 f3d4 c6d4 d3d4 g7g5 h4g5 h6g5 g1f1 g5g4 f2f3 g4f3 g2f3 h8g7 a2a4 f8h8 f1g2 g7f6 g2h1 h8h3 d4d3 d6c5 e2b2 f5g5 b2b1 a7a5 b1f1 c5e3 f1e1 h3f3 d3d8 g5h5 d8g8 f3h3 e1e2 e3c5".split(" ");
             set_legal_moves(function onset()
             {
-                if (board.mode !== "wait") {
+                if (stop_new_game) {
                     starting_new_game = false;
                     return;
                 }
@@ -756,6 +768,7 @@
                 starting_new_game = false;
                 hide_loading();
                 tell_engine_to_move();
+                G.events.trigger("newGameBegins");
             });
         });
     }
@@ -773,10 +786,18 @@
         }
     }
     
+    function get_other_player(player)
+    {
+        return board.players[player.color === "w" ? "b" : "w"];
+    }
+    
     function make_type_change(player)
     {
         function set_type(type)
         {
+            var other_player,
+                tmp_engine;
+            
             if (type === "human" || type === "ai") {
                 change_selected(player.els.type, type);
                 
@@ -784,13 +805,19 @@
                     player.type = type;
                     if (player.type === "ai") {
                         if (!player.engine) {
-                            player.engine = load_engine();
-                            ///NOTE: This shows that it's loaded so that we know that it can move.
-                            player.engine.send("uci", function onload()
-                            {
-                                /// Make sure it's all ready too.
-                                player.engine.send("isready");
-                            }); 
+                            other_player = get_other_player(player);
+                            if (other_player.type === "human" && other_player.engine) {
+                                player.engine = other_player.engine;
+                                delete other_player.engine;
+                            } else {
+                                player.engine = load_engine();
+                                ///NOTE: This shows that it's loaded so that we know that it can move.
+                                player.engine.send("uci", function onload()
+                                {
+                                    /// Make sure it's all ready too.
+                                    player.engine.send("isready");
+                                });
+                            }
                         }
                         
                         /// Set the AI level if not already.
@@ -801,11 +828,23 @@
                             tell_engine_to_move();
                         }
                         player.els.level.style.display = "inline";
-                    } else {
+                    } else { /// Human
                         if (player.engine) {
                             player.engine.stop_moves();
                         }
                         player.els.level.style.display = "none";
+                        other_player = get_other_player(player);
+                        
+                        /// Do we have an engine we don't need now and the other player needs one?
+                        if (player.engine && other_player.type === "ai" && !other_player.engine.ready && player.engine.started < other_player.engine.started) {
+                            tmp_engine = player.engine;
+                            player.engine = other_player.engine;
+                            other_player.engine = tmp_engine;
+                            
+                            player.set_level(player.level);
+                            other_player.set_level(other_player.level);
+                            console.log("switching");
+                        }
                     }
                 }
             }
