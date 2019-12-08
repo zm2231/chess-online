@@ -14,6 +14,7 @@
     var rating_slider;
     var new_game_el;
     var setup_game_el;
+    var game_info_text;
     var starting_new_game;
     var retry_move_timer;
     var clock_manager;
@@ -863,6 +864,8 @@
     {
         gameType = whichType || gameType;
         
+        game_info_text.textContent = "";
+        
         board.noRemoving = false;
         G.events.detach("board_human_move", watchKnightSight);
         G.events.detach("board_human_move", watchKnightJump);
@@ -908,9 +911,9 @@
             answers.forEach(function (ans)
             {
                 if (color) {
-                    board.highlight_square(ans.file, ans.rank, color);
+                    board.highlight_square(ans.rank, ans.file, color);
                 } else {
-                    board.remove_highlight(ans.file, ans.rank);
+                    board.remove_highlight(ans.rank, ans.file);
                 }
             });
         }
@@ -970,7 +973,7 @@
                 }
             }
             if (!found_already) {
-                board.highlight_square(e.file, e.rank, color);
+                board.highlight_square(e.rank, e.file, color);
             }
             /// Move it back.
             board.move(e.to + e.from);
@@ -1000,6 +1003,7 @@
         
         board.enable_setup();
         G.events.trigger("gameUnpaused");
+        G.events.trigger("newGameBegins");
         
         answers = getAllKnightMoves({rank: randRank, file: randFile});
     }
@@ -1033,6 +1037,19 @@
         return -1;
     }
     
+    function updateKnightJumpText()
+    {
+        var found = 0;
+        
+        answers.forEach(function (answer)
+        {
+            if (answer.found) {
+                found += 1;
+            }
+        });
+        game_info_text.textContent = found + "/" + answers.length;
+    }
+    
     function checkKnightJumpWin(path)
     {
         var i;
@@ -1043,9 +1060,9 @@
             answers.forEach(function (ans)
             {
                 if (color) {
-                    board.highlight_square(ans.file, ans.rank, color);
+                    board.highlight_square(ans.rank, ans.file, color);
                 } else {
-                    board.remove_highlight(ans.file, ans.rank);
+                    board.remove_highlight(ans.rank, ans.file);
                 }
             });
         }
@@ -1123,6 +1140,7 @@
                     color = "green";
                     if (currentMovePath.length === answers[0].length) {
                         answers[pathIndex].found = true;
+                        updateKnightJumpText();
                     }
                 } else {
                     currentMovePath.pop();
@@ -1143,7 +1161,6 @@
     {
         var currentPositions = [{rank: options.startRank, file: options.startFile, path: []}];
         var moves;        
-        /// Clear old answers
         var validPaths = [];
         var nextPositions;
         var foundPath;
@@ -1203,13 +1220,15 @@
         
         board.enable_setup();
         G.events.trigger("gameUnpaused");
+        G.events.trigger("newGameBegins");
         
-        board.highlight_square(endFile, endRank, "blue");
+        board.highlight_square(endRank, endFile, "blue");
         
         currentMovePath = [];
         answers = solveKnightJump({startRank: startRank, startFile: startFile, endRank: endRank, endFile: endFile});
         answers.startRank = startRank;
         answers.startFile = startFile;
+        updateKnightJumpText();
     }
     
     function start_new_game()
@@ -1685,7 +1704,8 @@
     function create_center()
     {
         new_game_el = G.cde("button", {t: "New Game"}, {click: function () {start_new()}});
-        setup_game_el = G.cde("button", {t: "Setup Game"}, {click: function () { init_setup}});
+        setup_game_el = G.cde("button", {t: "Setup Game"}, {click: function () {init_setup()}});
+        game_info_text = G.cde("span", {c: "gameInfoText"});
         var gameTypeSel = G.cde("Select", {oninput: changeType}, [
             G.cde("option", {value: "standard", t: "Standard", selected:"selected"}),
             G.cde("option", {value: "knightSight", t: "Knight Sight"}),
@@ -1696,6 +1716,7 @@
             new_game_el,
             setup_game_el,
             gameTypeSel,
+            game_info_text,
         ]));
         
         layout.rows[2].cells[1].appendChild(center_el);
@@ -2028,7 +2049,7 @@
         obj.set_eval = function (value)
         {
             obj.value = Number(value);
-            slider_el.style.height = ((obj.m * obj.value) + 50) + "%";
+            slider_el.style.height = ((obj.m * Math.max(Math.min(obj.value, obj.max), obj.min)) + 50) + "%";
         };
         
         /// Set default.
