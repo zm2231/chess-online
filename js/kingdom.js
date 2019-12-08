@@ -7,8 +7,9 @@
         stalemate_by_rules,
         evaler,
         loading_el,
-        player1_el = document.createElement("div"),
-        player2_el = document.createElement("div"),
+        player1_el = G.cde("div", {c: "player player_white"}),
+        player2_el = G.cde("div", {c: "player player_black"}),
+        center_el  = G.cde("div", {c: "center_el"}),
         starting_new_game,
         retry_move_timer,
         clock_manager,
@@ -231,7 +232,7 @@
     
     function calculate_board_size(w, h)
     {
-        w = w || window.innerWidth; 
+        w = w || window.innerWidth;
         h = h || window.innerHeight;
         
         if (w > h) {
@@ -260,19 +261,27 @@
             width = board_size;
         }
         
-        el_width = Math.floor((window.innerWidth - width) / 2);
+        el_width = Math.floor((window.innerWidth - width) / 2) - 10;
         
         player1_el.style.width = el_width + "px";
         player2_el.style.width = el_width + "px";
         
-        clock_manager.clock_els.w.style.width = (el_width - 10) + "px";
-        clock_manager.clock_els.b.style.width = (el_width - 10) + "px";
+        clock_manager.clock_els.w.style.width = el_width + "px";
+        clock_manager.clock_els.b.style.width = el_width + "px";
+    }
+    
+    function resize_center()
+    {
+        center_el.style.width = calculate_board_size() + "px";
+        //center_el.style.left = 
+        console.log(board);
     }
     
     function onresize()
     {
         resize_board();
-        resize_players()
+        resize_players();
+        resize_center();
     }
     
     function get_legal_moves(cb)
@@ -487,10 +496,10 @@
         clock_manager.stop_timer();
         set_legal_moves(function onset()
         {
+            tell_engine_to_move();
             if (board.mode === "play") {
                 clock_manager.start_timer();
             }
-            tell_engine_to_move();
         });
         
         G.events.trigger("move");
@@ -518,6 +527,13 @@
         if (board.players.b.type === "ai") {
             board.players.b.engine.send(cmd)
         }
+    }
+    
+    function use_depth(player)
+    {
+        /// On a timed game, if the player has more than 20 secs per depth, then limit to that depth.
+        /// We don't want to always force an ai to use a depth because it may take too long when time is low.
+        return player.engine.depth && (player.time_type === "none" || (player.time > player.engine.depth * 20000));
     }
     
     function tell_engine_to_move()
@@ -580,7 +596,7 @@
             /// If there's no time limit, limit the depth on some players.
             ///NOTE: There's no reason not to limit depth 1 since it's always fast.
             //if (player.time_type === "none" || Number(player.engine.depth) === 1) {
-            if (player.time_type === "none") {
+            if (use_depth(player)) {
                 depth = player.engine.depth;
             }
             
@@ -938,7 +954,7 @@
             
             time_val = time_from_str(time);
             
-            if (time_val !== player.start_time) {
+            if (time_val && time_val !== player.start_time) {
                 player.time = time_val;
                 player.start_time = time_val;
                 clock_manager.update_clock(player.color);
@@ -1034,11 +1050,6 @@
     
     function create_players()
     {
-        player1_el.classList.add("player");
-        player1_el.classList.add("player_white");
-        player2_el.classList.add("player");
-        player2_el.classList.add("player_black");
-        
         board.players.w.level = 0;
         board.players.b.level = 0;
         
@@ -1053,6 +1064,15 @@
         
         board.players.w.set_time_type("none");
         board.players.b.set_time_type("none");
+    }
+    
+    function create_center()
+    {
+        center_el.appendChild(G.cde("documentFragment", [
+            G.cde("button", {t: "New Game"}, {click: start_new_game}),
+        ]));
+        
+        board.el.parentNode.insertBefore(center_el, null);
     }
     
     function hide_loading()
@@ -1084,6 +1104,8 @@
         show_loading();
         
         create_players();
+        
+        create_center();
         
         board.onmove = onmove;
         
@@ -1174,7 +1196,7 @@
             /// Don't start the timer if the game has not yet begun.
             if (board.messy && !timer_on) {
                 last_time = Date.now();
-                tick_timer = setInterval(tick, 50);
+                tick_timer = setInterval(tick, 34);
                 timer_on = true;
             }
         }
@@ -1232,6 +1254,10 @@
                 res = hour + ":" + min + ":" + sec;
                 
             } else { /// Days
+                ///NOTE: NaN is always falsey, so it will come here. We check this here so that we don't need to waste time checking eariler.
+                if (isNaN(time)) {
+                    return "Error";
+                }
                 /// Always floor since we don't want to round to 60.
                 sec  = Math.floor((time % 60000) / 1000);
                 hour = Math.floor(time / 60000);
