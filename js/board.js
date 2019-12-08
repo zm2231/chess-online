@@ -633,7 +633,7 @@ var BOARD = function board_init(el, options)
         return icon;
     }
     
-    function create_modular_window()
+    function create_modular_window(options)
     {
         var mod_win = G.cde("div", {c: "board_modular_window"}),
             old_mode;
@@ -641,8 +641,11 @@ var BOARD = function board_init(el, options)
         function close_window()
         {
             document.body.removeChild(mod_win);
-            board.set_mode(old_mode);
+            if (!options.change_mode) {
+                board.set_mode(old_mode);
+            }
             delete board.close_modular_window;
+            window.removeEventListener("keydown", listen_for_close);
         }
         
         function open_window()
@@ -651,9 +654,43 @@ var BOARD = function board_init(el, options)
                 return setTimeout(open_window, 200);
             }
             board.close_modular_window = close_window;
-            old_mode = board.get_mode();
+            
             document.body.appendChild(mod_win);
-            board.set_mode("waiting_for_modular_window");
+            if (!options.change_mode) {
+                old_mode = board.get_mode();
+                board.set_mode("waiting_for_modular_window");
+            }
+        }
+        
+        function listen_for_close(e)
+        {
+            if (e.keyCode === 27) { /// escape
+                close_window();
+            }
+        }
+        
+        function add_x()
+        {
+            mod_win.appendChild(G.cde("div", {t: "X", c: "xButton"}, {click: close_window}));
+        }
+        
+        if (options) {
+            if (options.content) {
+                if (typeof options.content === "object") {
+                    mod_win.appendChild(options.content);
+                } else {
+                    mod_win.innerHTML = options.content;
+                }
+            }
+            if (options.cancelable) {
+                window.addEventListener("keydown", listen_for_close);
+                add_x();
+            }
+            if (options.open) {
+                open_window();
+            }
+        } else {
+            options = {};
         }
         
         return {
