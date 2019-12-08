@@ -22,8 +22,18 @@ html, body {
 .chess_board {
     
 }
+.fixinput {
+    /* Without this, the board moves when showing the time settings. */
+    width: 50%;
+}
+.movesTableContainer {
+    position: relative;
+    width: 100%;
+    overflow-y: scroll;
+}
 .movesTable {
     display: table;
+    position: absolute;
     width: 100%;
 }
 .moveRow {

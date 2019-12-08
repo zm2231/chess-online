@@ -258,6 +258,7 @@
         resize_board();
         resize_players();
         rating_slider.resize();
+        moves_manager.resize();
     }
     
     function get_legal_moves(pos, cb)
@@ -1179,6 +1180,11 @@
                     clock_manager.clear(player.color);
                 }
             }
+            
+            /// The moves box may need to be resized too.
+            if (moves_manager) {
+                moves_manager.resize();
+            }
         }
         
         function onchange()
@@ -1642,9 +1648,11 @@
     function make_moves_el()
     {
         var moves_el = G.cde("div", {c: "movesTable"}),
+            container_el = G.cde("div", {c: "movesTableContainer"}),
             rows,
             plys,
-            cur_row;
+            cur_row,
+            offset_height;
         
         function add_move(color, san, time)
         {
@@ -1653,9 +1661,26 @@
                 color: color,
                 time: time,
                 san_el:  G.cde("div", {c: "moveCell", t: san}),
-                eval_el: G.cde("div", {c: "moveCell"}),
-                time_el: G.cde("div", {c: "moveCell", t: time || ""}),
-            };
+                eval_el: G.cde("div", {c: "moveCell", t: "\u00a0"}), /// \u00a0 is &nbsp;
+                time_el: G.cde("div", {c: "moveCell", t: time || "\u00a0"}),
+            },
+                need_to_add_placeholders,
+                scroll_pos;
+            
+            /// Placeholders are necessary to keep the table columns the proper width. It's only needed to fill out the first row.
+            function add_placeholding_els()
+            {
+                var placeholders = [],
+                    i,
+                    len = 3;
+                
+                for (i = 0; i < len; i += 1) {
+                    placeholders[i] = G.cde("div", {c: "moveCell", t: "\u00a0"});
+                    rows[cur_row].row_el.appendChild(placeholders[i]);
+                }
+                
+                rows[cur_row].placeholders = placeholders;
+            }
             
             if (!rows[cur_row]) {
                 rows[cur_row] = {
@@ -1665,17 +1690,42 @@
                 };
                 rows[cur_row].row_el.appendChild(G.cde("div", {c: "moveNumCell", t: (cur_row + 1)}));
                 moves_el.appendChild(rows[cur_row].row_el);
+                need_to_add_placeholders = plys.length === 0;
+            } else if (rows[cur_row].placeholders) {
+                rows[cur_row].placeholders.forEach(function (el)
+                {
+                    if (el && el.parentNode) {
+                        el.parentNode.removeChild(el);
+                    }
+                });
+                delete rows[cur_row].placeholders;
+            }
+            
+            if (need_to_add_placeholders && color === "b") {
+                add_placeholding_els();
+                need_to_add_placeholders = false;
             }
             
             rows[cur_row].row_el.appendChild(move_data.san_el);
             rows[cur_row].row_el.appendChild(move_data.eval_el);
             rows[cur_row].row_el.appendChild(move_data.time_el);
             
+            if (need_to_add_placeholders) {
+                add_placeholding_els();
+            }
+            
             rows[cur_row][color] = move_data;
             plys.push(move_data);
             
             if (color === "b") {
                 cur_row += 1;
+            }
+            
+            scroll_pos = container_el.scrollHeight - offset_height;
+            
+            /// Scroll to the bottom to reveal new move (if necessary).
+            if (scroll_pos) {
+                container_el.scrollTop = scroll_pos;
             }
         }
         
@@ -1693,7 +1743,7 @@
                     display_score = "1-0";
                 }
             } else {
-                display_score = score + "#";
+                display_score = "#" + score;
             }
             
             if (move_data) {
@@ -1709,14 +1759,34 @@
             plys = [];
         }
         
+        function resize()
+        {
+            var this_box = container_el.getBoundingClientRect(),
+                cell_box,
+                old_display = container_el.style.display;
+                
+            ///NOTE: We need to hide this for a moment to see what the height of the cell should be.
+            container_el.style.display = "none";
+            cell_box = layout.rows[1].cells[2].getBoundingClientRect();
+            container_el.style.display = old_display;
+            
+            container_el.style.height = (cell_box.height - this_box.top) + "px";
+            
+            offset_height = container_el.offsetHeight;
+        }
+        
         moves_manager = {
             add_move: add_move,
-            update_eval: update_eval
+            update_eval: update_eval,
+            resize: resize,
         };
         
-        layout.rows[1].cells[2].appendChild(moves_el);
+        layout.rows[1].cells[2].appendChild(container_el);
+        container_el.appendChild(moves_el);
         
         G.events.attach("newGameBegins", reset_moves);
+        
+        //resize();
         
         reset_moves();
     }
@@ -1793,8 +1863,6 @@
         
         rating_slider = make_rating_slider();
         
-        onresize();
-        
         window.addEventListener("resize", onresize);
         
         show_loading();
@@ -1804,6 +1872,8 @@
         create_center();
         
         make_moves_el();
+        
+        onresize();
         
         board.onmove = on_human_move;
         
