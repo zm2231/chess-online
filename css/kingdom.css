@@ -1,5 +1,6 @@
 html, body {
     margin: 0;
+    font-family: arial, sans;
 }
 
 .table {
@@ -20,6 +21,25 @@ html, body {
 
 .chess_board {
     
+}
+.movesTable {
+    display: table;
+    width: 100%;
+}
+.moveRow {
+    display: table-row;
+}
+.moveCell {
+    display: table-cell;
+    width: 15%;
+}
+.moveNumCell {
+    display: table-cell;
+    width: 10%;
+}
+.plyNotation {
+    width: 50%;
+    display: inline-block;
 }
 
 .loading {
@@ -43,6 +63,13 @@ html, body {
     margin: 0px 4px;
 }
 
+.table_cell_1_0 {
+    padding-left: 5px;
+}
+.table_cell_1_2 {
+    padding-left: 7px;
+}
+/*
 .player_left {
     padding: 0 5px;
 }
@@ -50,6 +77,7 @@ html, body {
 .player_right {
     padding: 0 7px;
 }
+*/
 
 /*
 .player {
