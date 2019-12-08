@@ -131,6 +131,7 @@
             var san = str.match(/Legal moves\:(.*)/),
                 uci = str.match(/Legal uci moves\:(.*)/),
                 checkers = str.match(/Checkers\:(.*)/),
+                fen = str.match(/Fen\: (\S+) (\S+) (\S+) (\S+) (\S+) (\S+)/),
                 res;
             
             if (!san || !uci || !checkers) {
@@ -142,6 +143,17 @@
                 uci: uci[1].trim().split(" "),
                 checkers: checkers[1].trim().split(" "),
             };
+            
+            if (fen) {
+                res.fen = {
+                    placement: fen[1],
+                    turn: fen[2],
+                    castling_ability: fen[3],
+                    en_passant: fen[4],
+                    half_move_clock: fen[5],
+                    full_move_counter: fen[6],
+                };
+            }
             
             if (res.san.length === 1 && res.san[0] === "") {
                 res.san = [];
@@ -158,12 +170,22 @@
         });
     }
     
+    function is_stalemate_by_rule(fen)
+    {
+        if (fen.half_move_clock > 99) {
+            return "50";
+        }
+    }
+    
     function set_legal_moves(cb)
     {
         get_legal_moves(function onget(moves)
         {
+            var stalemate_by_rules = is_stalemate_by_rule(moves.fen);
             /// Is the game still on?
-            if (moves.uci.length) {
+            
+            ///TODO: Only AI should automatically claim 50 move rule. (And probably not the lower levels).
+            if (moves.uci.length && !stalemate_by_rules) {
                 board.legal_moves = moves;
                 if (cb) {
                     cb();
@@ -172,10 +194,16 @@
                 board.legal_moves = [];
                 if (board.mode === "play") {
                     /// Was it checkmate?
-                    if (moves.checkers.length) {
+                    if (moves.checkers.length && !stalemate_by_rules) {
                         alert((board.turn === "b" ? "Black" : "White") + " is checkmated!");
                     } else {
-                        alert("Stalemate!");
+                        if (stalemate_by_rules) {
+                            if (stalemate_by_rules === "50") {
+                                alert("Stalemate: 50 move rule");
+                            }
+                        } else {
+                            alert("Stalemate!");
+                        }
                     }
                     board.wait();
                 }
@@ -196,9 +224,8 @@
         
         board.move(res[1]);
         set_ai_position();
-        ///TODO: FIx race conditions.
-        ///NOTE: We don't need to check for legal moves if there are two ai's.
-        set_legal_moves();
+        
+        set_legal_moves(tell_engine_to_move);
     }
     
     function onthinking(str)
@@ -213,24 +240,20 @@
     
     function tell_engine_to_move()
     {
-        //uciCmd("go " + (time.depth ? "depth " + time.depth : "") + " wtime " + time.wtime + " winc " + time.winc + " btime " + time.btime + " binc " + time.binc);
-        /// Without time, it thinks really fast.
-        engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 100000 btime 100000" , onengine_move, onthinking);
+        if (board.players[board.turn].type === "ai") {
+            //uciCmd("go " + (time.depth ? "depth " + time.depth : "") + " wtime " + time.wtime + " winc " + time.winc + " btime " + time.btime + " binc " + time.binc);
+            /// Without time, it thinks really fast.
+            engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 100000 btime 100000" , onengine_move, onthinking);
+            return true;
+        }
     }
     
     function onmove(move)
     {
-        board.moves.push(move);
-        
         set_ai_position();
         
         ///NOTE: We need to get legal moves (even for AI) because we need to know if a move is castling or not.
-        set_legal_moves(function ()
-        {
-            if (board.players[board.turn].type === "ai") {
-                tell_engine_to_move();
-            }
-        });
+        set_legal_moves(tell_engine_to_move);
     }
     
     function start_new_game()
@@ -243,6 +266,7 @@
         {
             loading_el.classList.add("hidden");
             board.play();
+            tell_engine_to_move();
         });
     }
     
