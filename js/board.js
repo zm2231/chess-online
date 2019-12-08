@@ -12,6 +12,11 @@ var BOARD = function board_init(el, options)
         squares,
         pos;
     
+    function num_to_alpha(num)
+    {
+        return ["a", "b", "c", "d", "e", "f", "g", "h"][num];
+    }
+    
     function error(str)
     {
         str = str || "Unknown error";
@@ -159,14 +164,13 @@ var BOARD = function board_init(el, options)
         return board;
     }
     
-    function load_pieces_from_start()
+    function load_pieces_from_start(fen)
     {
-        var fen_pieces = pos.match(/^\S+/),
+        var fen_pieces = fen.match(/^\S+/),
             rank = 7,
             file = 0,
             id = 0;
         
-        ///TODO: Delete old pieces.
         if (board.pieces) {
             board.pieces.forEach(function oneach(piece)
             {
@@ -305,7 +309,7 @@ var BOARD = function board_init(el, options)
         }
     }
     
-    function create_promotion_icon(which, cb)
+    function create_promotion_icon(which, piece, cb)
     {
         var icon = document.createElement("div");
         
@@ -314,17 +318,19 @@ var BOARD = function board_init(el, options)
             cb(which);
         });
         
-        icon.style.backgroundImage = get_piece_img({color: board.turn, type: which});
+        /// In play mode, we can go with the color; in setup mode, we need to get the color from the piece.
+        icon.style.backgroundImage = get_piece_img({color: board.mode === "play" ? board.turn : piece.color, type: which});
         
         icon.classList.add("promotion_icon");
         
         return icon;
     }
     
-    function promotion_prompt(cb)
+    function promotion_prompt(piece, cb)
     {
         var mod_win = document.createElement("div"),
-            text_el = document.createElement("div");
+            text_el = document.createElement("div"),
+            old_mode = board.mode;
         
         mod_win.classList.add("board_modular_window");
         
@@ -336,7 +342,7 @@ var BOARD = function board_init(el, options)
         
         function onselect(which)
         {
-            board.mode = "play";
+            board.mode = old_mode;
             close_window();
             cb(which);
         }
@@ -346,17 +352,17 @@ var BOARD = function board_init(el, options)
         
         mod_win.appendChild(text_el);
         
-        mod_win.appendChild(create_promotion_icon("q", onselect));
-        mod_win.appendChild(create_promotion_icon("r", onselect));
-        mod_win.appendChild(create_promotion_icon("b", onselect));
-        mod_win.appendChild(create_promotion_icon("n", onselect));
+        mod_win.appendChild(create_promotion_icon("q", piece, onselect));
+        mod_win.appendChild(create_promotion_icon("r", piece, onselect));
+        mod_win.appendChild(create_promotion_icon("b", piece, onselect));
+        mod_win.appendChild(create_promotion_icon("n", piece, onselect));
         
         document.body.appendChild(mod_win);
         board.mode = "waiting_for_modular_window";
         board.modular_window_close = close_window;
     }
     
-    function report_move(uci, promoting, cb)
+    function report_move(uci, promoting, piece, cb)
     {
         /// We make it async because of promotion.
         function record()
@@ -374,7 +380,7 @@ var BOARD = function board_init(el, options)
         }
         
         if (promoting) {
-            promotion_prompt(function onres(answer)
+            promotion_prompt(piece, function onres(answer)
             {
                 ///NOTE: The uci move already includes a promotion to queen to make it a valid move. We need to remove this and replace it with the desired promotion.
                 uci = uci.substr(0, 4) + answer;
@@ -396,6 +402,9 @@ var BOARD = function board_init(el, options)
         
         piece.el.style.left = (square.file * 100) + "%";
         piece.el.style.right = -(square.file * 100) + "%";
+        
+        piece.rank = square.rank;
+        piece.file = square.file;
     }
     
     function get_san(uci)
@@ -426,15 +435,13 @@ var BOARD = function board_init(el, options)
             return false;
         }
         
-        /// Indicate that the board has been changed; it is not in the inital starting position.
-        board.messy = true;
-        
-        set_piece_pos(piece, square);
-        
         ///NOTE: This does not find en passant captures. See below.
         captured_piece = get_piece_from_rank_file(square.rank, square.file);
         
         if (board.mode === "play") {
+            /// Indicate that the board has been changed; it is not in the inital starting position.
+            board.messy = true;
+            
             /// En passant
             if (!captured_piece && piece.type === "p" && piece.file !== square.file && ((piece.color === "w" && square.rank === board_details.ranks - 3) || (piece.color === "b" && square.rank === 2))) {
                 captured_piece = get_piece_from_rank_file(piece.rank, square.file);
@@ -449,17 +456,24 @@ var BOARD = function board_init(el, options)
             if (san === "O-O") { /// Kingside castle
                 rook = get_piece_from_rank_file(rook_rank, 7);
                 set_piece_pos(rook, {rank: rook_rank, file: 5});
-                rook.file = 5;
             } else if (san === "O-O-O") { /// Queenside castle
                 rook = get_piece_from_rank_file(rook_rank, 0);
                 set_piece_pos(rook, {rank: rook_rank, file: 3});
-                rook.file = 3;
+            }
+        } else if (board.mode === "setup" && captured_piece) {
+            /// The pieces should swap places.
+            set_piece_pos(captured_piece, piece);
+            
+            if (captured_piece.type === "p" && (captured_piece.rank === 0 || captured_piece.rank === board_details.ranks - 1)) {
+                promotion_prompt(captured_piece, function onres(answer)
+                {
+                    promote_piece(captured_piece, num_to_alpha(square.file) + square.rank + num_to_alpha(piece.file) + piece.rank + answer);
+                });
             }
         }
         
         /// Make sure to change the rank and file after checking for a capured piece so that you don't capture yourself.
-        piece.rank = square.rank;
-        piece.file = square.file;
+        set_piece_pos(piece, square);
     }
     
     function is_promoting(piece, square)
@@ -469,6 +483,24 @@ var BOARD = function board_init(el, options)
         }
         
         return piece.type === "p" && square.rank % (board_details.ranks - 1) === 0;
+    }
+    
+    function remove_piece(piece)
+    {
+        var i;
+        
+        for (i = board.pieces.length - 1; i >= 0; i -= 1) {
+            if (piece.id === board.pieces[i].id) {
+                G.array_remove(board.pieces, i);
+                /// Make it fade out.
+                piece.el.classList.add("captured");
+                setTimeout(function ()
+                {
+                    piece.el.parentNode.removeChild(piece.el);
+                }, 2000);
+                return;
+            }
+        }
     }
     
     function onmouseup(e)
@@ -491,7 +523,7 @@ var BOARD = function board_init(el, options)
             if (square && (board.mode === "setup" || is_legal_move(uci))) {
                 piece_storage = board.dragging.piece;
                 move_piece(board.dragging.piece, square, uci);
-                report_move(uci, promoting, function onreport(finalized_uci)
+                report_move(uci, promoting, board.dragging.piece, function onreport(finalized_uci)
                 {
                     ///NOTE: Since this is async, we need to store which piece was moved.
                     promote_piece(piece_storage, finalized_uci);
@@ -499,10 +531,19 @@ var BOARD = function board_init(el, options)
             } else {
                 /// Snap back.
                 ///TODO: Be able to remove pieces in setup mode.
+                if (board.mode === "setup") {
+                    remove_piece(board.dragging.piece);
+                    /// We need to remove "dragging" to make the transitions work again.
+                    board.dragging.piece.el.classList.remove("dragging");
+                    delete board.dragging.piece;
+                }
             }
             
-            prefix_css(board.dragging.piece.el, "transform", "none");
-            board.dragging.piece.el.classList.remove("dragging");
+            /// If it wasn't deleted
+            if (board.dragging.piece) {
+                prefix_css(board.dragging.piece.el, "transform", "none");
+                board.dragging.piece.el.classList.remove("dragging");
+            }
             board.el.classList.remove("dragging");
             
             delete board.dragging;
@@ -514,9 +555,11 @@ var BOARD = function board_init(el, options)
         return "url(\"" + encodeURI("img/pieces/" + board.theme + "/" + piece.color + piece.type + (board.theme_ext || ".svg")) + "\")";
     }
     
-    function set_board()
+    function set_board(fen)
     {
-        load_pieces_from_start();
+        fen = fen || get_init_pos();
+        
+        load_pieces_from_start(fen);
         
         board.pieces.forEach(function oneach(piece)
         {
@@ -544,6 +587,7 @@ var BOARD = function board_init(el, options)
     {
         board.mode = "wait";
         board.el.classList.add("waiting");
+        board.el.classList.remove("settingUp");
         board.el.classList.remove("playing");
     }
     
@@ -551,7 +595,16 @@ var BOARD = function board_init(el, options)
     {
         board.mode = "play";
         board.el.classList.remove("waiting");
+        board.el.classList.remove("settingUp");
         board.el.classList.add("playing");
+    }
+    
+    function enable_setup()
+    {
+        board.mode = "setup";
+        board.el.classList.remove("waiting");
+        board.el.classList.remove("playing");
+        board.el.classList.add("settingUp");
     }
     
     function get_piece_from_rank_file(rank, file)
@@ -626,6 +679,53 @@ var BOARD = function board_init(el, options)
         track_move(uci);
     }
     
+    function get_fen(full)
+    {
+        var ranks = [],
+            i,
+            j,
+            fen = "";
+        
+        board.pieces.forEach(function (piece)
+        {
+            if (!piece.captured) {
+                if (!ranks[piece.rank]) {
+                    ranks[piece.rank] = [];
+                }
+                ranks[piece.rank][piece.file] = piece.type;
+                if (piece.color === "w") {
+                    ranks[piece.rank][piece.file] = ranks[piece.rank][piece.file].toUpperCase();
+                }
+            }
+        });
+        
+        /// Start with the last rank.
+        for (i = board_details.ranks - 1; i >= 0; i -= 1) {
+            if (ranks[i]) {
+                for (j = 0; j < board_details.files; j += 1) {
+                    if (ranks[i][j]) {
+                        fen += ranks[i][j];
+                    } else {
+                        fen += "1";
+                    }
+                }
+            } else {
+                fen += "8";
+            }
+            if (i > 0) {
+                fen += "/";
+            }
+        }
+        
+        /// Replace 1's with their number (e.g., 11 with 2).
+        fen = fen.replace(/1{2,}/g, function replacer(ones)
+        {
+            return String(ones.length);
+        });
+        
+        return fen;
+    }
+    
     board = {
         pieces: [],
         size_board: size_board,
@@ -633,6 +733,7 @@ var BOARD = function board_init(el, options)
         mode: "setup",
         wait: wait,
         play: play,
+        enable_setup: enable_setup,
         move: move,
         players: {
             w: {
@@ -645,7 +746,8 @@ var BOARD = function board_init(el, options)
         switch_turn: switch_turn,
         set_board: set_board,
         is_legal_move: is_legal_move,
-        moves: []
+        moves: [],
+        get_fen: get_fen,
     /// legal_move[]
     /// onmove()
     /// onswitch()
@@ -653,13 +755,9 @@ var BOARD = function board_init(el, options)
     
     options = options || {};
     
-    if (!options.pos) {
-        pos = get_init_pos();
-    }
-    
     create_board(el, options.dim);
     
-    set_board();
+    set_board(options.pos);
     
     window.addEventListener("mousemove", onmousemove);
     window.addEventListener("mouseup", onmouseup);
