@@ -1195,26 +1195,7 @@
     {
         function set_sd_time(time)
         {
-            var time_val,
-                using_el;
-            
-            if (typeof time === "undefined") {
-                time = player.els.sd.value;
-                using_el = true;
-            }
-            
-            time_val = time_from_str(time);
-            
-            if (!time_val && using_el) {
-                player.els.sd.value = default_sd_time;
-                time_val = time_from_str(default_sd_time);
-            }
-            
-            if (time_val && time_val !== player.start_time) {
-                player.time = time_val;
-                player.start_time = time_val;
-                clock_manager.update_clock(player.color);
-            }
+            clock_manager.set_time(player.color, "sd", {time: time});
         }
         
         function onchange()
@@ -1416,11 +1397,11 @@
             if (time < 0) {
                 if (allow_neg) {
                     sign = "-";
+                    time = Math.abs(time);
                 } else {
                     time = 0;
                 }
             }
-            time = Math.abs(time);
             
             if (time < 10000) { /// Less than 10 sec
                 res = (time / 1000).toFixed(3); /// Show decimal
@@ -1488,9 +1469,53 @@
         function reset_clock(color)
         {
             var player = board.players[color];
+            delete player.last_move_time;
             if (player.has_time) {
                 player.time = player.start_time;
+                player.move_start_time = player.start_time;
                 clock_manager.update_clock(player.color)
+            }
+        }
+        
+        function set_start_time(player, time)
+        {
+            player.start_time = time;
+            player.move_start_time = time;
+        }
+        
+        function set_sd_time(color, time)
+        {
+            var time_val,
+                using_el,
+                player = board.players[color];
+            
+            if (typeof time === "undefined") {
+                time = player.els.sd.value;
+                using_el = true;
+            }
+            
+            time_val = time_from_str(time);
+            
+            if (!time_val && using_el) {
+                player.els.sd.value = default_sd_time;
+                time_val = time_from_str(default_sd_time);
+            }
+            
+            if (time_val && time_val !== player.start_time) {
+                player.time = time_val;
+                set_start_time(player, time_val);
+                update_clock(color);
+            }
+        }
+        
+        function set_time(color, type, options)
+        {
+            options = options || {};
+            
+            if (type === "sd") {
+                set_sd_time(color, options.time);
+            } else if (type === "none") {
+                
             }
         }
         
@@ -1500,12 +1525,16 @@
             reset_clock("b");
         };
         
-        board.onswitch = function onswitch()
+        G.events.attach("board_turn_switch", function onswitch(e)
         {
+            var player;
             if (timer_on) {
-                tick(board.turn === "w" ? "b" : "w");
+                tick(e.last_turn);
+                player = board.players[e.last_turn];
+                player.last_move_time = player.move_start_time - player.time;
+                player.move_start_time = player.time;
             }
-        };
+        });
         
         layout.rows[2].cells[0].appendChild(clock_els.w);
         layout.rows[2].cells[2].appendChild(clock_els.b);
@@ -1522,11 +1551,14 @@
         {
             if (clock_els[color]) {
                 clock_els[color].textContent = "--";
+                delete board.players[color].move_start_time;
             }
         };
         
         clock_manager.start_timer = start_timer;
         clock_manager.stop_timer = stop_timer;
+        
+        clock_manager.set_time = set_time;
         
         return clock_manager;
     };
@@ -1657,6 +1689,59 @@
             cur_row,
             offset_height;
         
+        function format_move_time(time)
+        {
+            var res,
+                sec,
+                min,
+                hour,
+                day;
+            
+            time = parseFloat(time);
+            
+            if (time < 0) {
+                time = 0;
+            }
+            
+            if (time < 100) { /// Less than 1 sec
+                res = time + "ms";
+            } else if (time < 1000) { /// Less than 1 sec
+                res = ((Math.round(time / 100)) / 10) + "s";
+            } else if (time < 60000) { /// Less than 1 minute
+                res = Math.round(time / 1000) + "s";
+            } else if (time < 3600000) { /// Less than 1 hour
+                /// Always floor since we don't want to round to 60.
+                sec = Math.floor((time % 60000) / 1000);
+                min = Math.floor(time / 60000);
+                res = min + "m" + sec + "s";
+            } else if (time < 86400000) { /// Less than 1 day
+                /// Always floor since we don't want to round to 60.
+                sec  = Math.floor((time % 60000) / 1000);
+                hour = Math.floor(time / 60000);
+                min  = Math.floor(hour % 60);
+                hour = (hour - min) / 60;
+                
+                res = hour + "h" + min + "m" + sec + "s";
+                
+            } else { /// Days
+                ///NOTE: NaN is always falsey, so it will come here. We check this here so that we don't need to waste time checking eariler.
+                if (isNaN(time)) {
+                    return "Error";
+                }
+                /// Always floor since we don't want to round to 60.
+                sec  = Math.floor((time % 60000) / 1000);
+                hour = Math.floor(time / 60000);
+                min  = Math.floor(hour % 60);
+                hour = (hour - min) / 60;
+                day = Math.floor(hour / 24);
+                hour = hour % 24;
+                
+                res = day + "d" + hour + "h" + min + "m" + sec + "s";
+            }
+            
+            return res;
+        }
+        
         function add_move(color, san, time)
         {
             var move_data = {
@@ -1665,7 +1750,7 @@
                 time: time,
                 san_el:  G.cde("div", {c: "moveCell moveSAN move" + color + " moveRow" + (cur_row % 2 ? "Even" : "Odd"), t: clean_san(san)}),
                 eval_el: G.cde("div", {c: "moveCell moveEval move" + color + " moveRow" + (cur_row % 2 ? "Even" : "Odd"), t: "\u00a0"}), /// \u00a0 is &nbsp;
-                time_el: G.cde("div", {c: "moveCell moveTime move" + color + " moveRow" + (cur_row % 2 ? "Even" : "Odd"), t: time || "\u00a0"}),
+                time_el: G.cde("div", {c: "moveCell moveTime move" + color + " moveRow" + (cur_row % 2 ? "Even" : "Odd"), t: typeof time === "number" ? format_move_time(time) : "\u00a0"}),
             },
                 need_to_add_placeholders,
                 scroll_pos;
@@ -1678,7 +1763,9 @@
                     len = 3;
                 
                 for (i = 0; i < len; i += 1) {
-                    placeholders[i] = G.cde("div", {c: "moveCell", t: "\u00a0"});
+                    ///NOTE: We make it moveSAN to make the ellipse bold.
+                    ///NOTE: Don't add ellipse on checkmate (unless we're adding the placeholder earlier (i.e., we're black)).
+                    placeholders[i] = G.cde("div", {c: "moveCell moveSAN move" + (color === "w" ? "b" : "w") + " moveRow" + (cur_row % 2 ? "Even" : "Odd"), t: i === 0 && color === "b" || san.slice(-1) !== "#" ? "\u2026" : "\u00a0"}); /// \u2026 is ellipse; \u00a0 is non-breaking space.
                     rows[cur_row].row_el.appendChild(placeholders[i]);
                 }
                 
@@ -1713,7 +1800,7 @@
             rows[cur_row].row_el.appendChild(move_data.eval_el);
             rows[cur_row].row_el.appendChild(move_data.time_el);
             
-            if (need_to_add_placeholders) {
+            if (color === "w") {
                 add_placeholding_els();
             }
             
@@ -1788,8 +1875,6 @@
         container_el.appendChild(moves_el);
         
         G.events.attach("newGameBegins", reset_moves);
-        
-        //resize();
         
         reset_moves();
     }
@@ -1902,17 +1987,24 @@
     
     G.events.attach("move", function onmove(e)
     {
-        var ply = game_history.length;
+        var ply = game_history.length,
+            color;
         
         if (!pieces_moved) {
             G.events.trigger("firstMove");
             pieces_moved = true;
         }
         
+        /// player.last_move_time
         ///NOTE: board.turn has already switched.
-        game_history[ply] = {move: e.uci, ponder: e.ponder, turn: board.turn, pos: cur_pos_cmd, color: board.turn === "b" ? "w" : "b"};
+        color = board.turn === "b" ? "w" : "b";
+        game_history[ply] = {move: e.uci, ponder: e.ponder, turn: board.turn, pos: cur_pos_cmd, color: color};
+        
+        if (board.players[color].has_time) {
+            game_history[ply].move_time = board.players[color].last_move_time;
+        }
         prep_eval(cur_pos_cmd, ply);
-        moves_manager.add_move(game_history[ply].color, e.san);
+        moves_manager.add_move(color, e.san, game_history[ply].move_time);
     });
     
     init();
