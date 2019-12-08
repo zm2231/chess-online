@@ -30,6 +30,9 @@
     var layout = {};
     var default_sd_time = "15:00";
     var showing_loading;
+    var gameType = "knightJump";
+    var answers;
+    var currentMovePath;
     
     function error(str)
     {
@@ -855,12 +858,358 @@
         }
     }
     
+    function start_new(whichType)
+    {
+        gameType = whichType || gameType;
+        
+        board.noRemoving = false;
+        G.events.detach("board_human_move", watchKnightSight);
+        G.events.detach("board_human_move", watchKnightJump);
+        
+        if (gameType === "standard") {
+            start_new_game();
+        } else if (gameType === "knightSight") {
+            startKnightSight();
+        } else if (gameType === "knightJump") {
+            startKnightJump();
+        }
+    }
+    
+    function getAllKnightMoves(options)
+    {
+        var ans = [];
+        var x;
+        var y;
+        
+        for (x = -2; x <= 2; x += 1) {
+            for (y = -2; y <= 2; y += 1) {
+                if (Math.abs(x) + Math.abs(y) === 3 && options.rank + y >= 0 && options.rank + y <= 7 && options.file + x >= 0 && options.file + x <= 7) {
+                    ans.push({
+                        rank: options.rank + y,
+                        file: options.file + x,
+                    });
+                }
+            }
+        }
+        
+        return ans;
+    }
+    
+    function checkKnightSightWin()
+    {
+        var i;
+        var len = answers.length;
+        
+        function highlight_set_all(color)
+        {
+            answers.forEach(function (ans)
+            {
+                if (color) {
+                    board.highlight_square(ans.file, ans.rank, color);
+                } else {
+                    board.remove_highlight(ans.file, ans.rank);
+                }
+            });
+        }
+        
+        for (i = 0; i < len; i += 1) {
+            if (!answers[i].found) {
+                board.move(e.to + e.from);
+                return false;
+            }
+        }
+        
+        board.wait();
+        G.events.trigger("gamePaused");
+        
+        setTimeout(function ()
+        {
+            highlight_set_all();
+            setTimeout(function ()
+            {
+                highlight_set_all("green");
+                setTimeout(function ()
+                {
+                    highlight_set_all();
+                    setTimeout(function ()
+                    {
+                        highlight_set_all("green");
+                        setTimeout(function ()
+                        {
+                            start_new();
+                        }, 300);
+                    }, 300);
+                }, 300);
+            }, 300);
+        }, 300);
+        
+        return true;
+    }
+    
+    function watchKnightSight(e)
+    {
+        var color = "red";
+        var i;
+        var len = answers.length;
+        var found_already;
+        
+        /// Did it move squares?
+        if (e.oldRank !== e.rank || e.oldFile !== e.file) {
+            /// Is it a valid knight move?
+            for (i = 0; i < len; i += 1) {
+                if (answers[i].rank === e.rank && answers[i].file === e.file) {
+                    color = "green";
+                    if (answers[i].found) {
+                        found_already = true;
+                    } else {
+                        answers[i].found = true;
+                    }
+                    break;
+                }
+            }
+            if (!found_already) {
+                board.highlight_square(e.file, e.rank, color);
+            }
+            /// Move it back.
+            board.move(e.to + e.from);
+            checkKnightSightWin();
+        }
+    }
+    
+    function startKnightSight()
+    {
+        var randRank = G.rand(0, 7);
+        var randFile = G.rand(0, 7);
+        
+        stop_game();
+        
+        board.clear();
+        
+        board.noRemoving = true;
+        
+        board.add_piece({
+            color: "w",
+            rank: randRank,
+            file: randFile,
+            type: "n"
+        });
+        
+        G.events.attach("board_human_move", watchKnightSight);
+        
+        board.enable_setup();
+        G.events.trigger("gameUnpaused");
+        
+        answers = getAllKnightMoves({rank: randRank, file: randFile});
+    }
+    
+    function indexOfPath(validPaths, path, depth)
+    {
+        var i;
+        var len = validPaths.length;
+        depth = depth || 0;
+        
+        for (i = 0; i < len; i += 1) {
+            if (validPaths[i].length > depth && path.length > depth) {
+                if (validPaths[i][depth].rank === path[depth].rank && validPaths[i][depth].file === path[depth].file) {
+                    if (depth === path.length - 1) {
+                        return i;
+                    } else {
+                        return indexOfPath(validPaths, path, depth + 1);
+                    }
+                }
+            }
+        }
+        
+        return -1;
+    }
+    
+    function checkKnightJumpWin(path)
+    {
+        var i;
+        var len = answers.length;
+        
+        function highlight_set_all(color)
+        {
+            answers.forEach(function (ans)
+            {
+                if (color) {
+                    board.highlight_square(ans.file, ans.rank, color);
+                } else {
+                    board.remove_highlight(ans.file, ans.rank);
+                }
+            });
+        }
+        
+        function moveBackToBegining()
+        {
+            currentMovePath = [];
+            var curPos = path[path.length - 1];
+            var curSq = "abcdefgh"[curPos.file] + (curPos.rank + 1);
+            var startSq = "abcdefgh"[answers.startFile] + (answers.startRank + 1);
+            board.move(curSq + startSq);            
+        }
+        
+        if (path.length !== answers[0].length) {
+            return false;
+        }
+        
+        for (i = 0; i < len; i += 1) {
+            if (!answers[i].found) {
+                moveBackToBegining();
+                return false;
+            }
+        }
+        
+        board.wait();
+        G.events.trigger("gamePaused");
+        return start_new();
+        setTimeout(function ()
+        {
+            highlight_set_all();
+            setTimeout(function ()
+            {
+                highlight_set_all("green");
+                setTimeout(function ()
+                {
+                    highlight_set_all();
+                    setTimeout(function ()
+                    {
+                        highlight_set_all("green");
+                        setTimeout(function ()
+                        {
+                            start_new();
+                        }, 300);
+                    }, 300);
+                }, 300);
+            }, 300);
+        }, 300);
+        
+        return true;
+    }
+    
+    function watchKnightJump(e)
+    {
+        var color = "red";
+        var i;
+        var found_already;
+        var moves = getAllKnightMoves({rank: e.oldRank, file: e.oldFile});
+        var len = moves.length;
+        console.log(moves)
+        var isValid;
+        var pathIndex;
+        
+        /// Did it move squares?
+        if (e.oldRank !== e.rank || e.oldFile !== e.file) {
+            /// Is it a valid knight move?
+            for (i = 0; i < len; i += 1) {
+                if (moves[i].rank === e.rank && moves[i].file === e.file) {
+                    isValid = true;
+                    break;
+                }
+            }
+            if (isValid) {
+                currentMovePath.push({rank: e.rank, file: e.file});
+                pathIndex = indexOfPath(answers, currentMovePath);
+                if (pathIndex > -1) {
+                    color = "green";
+                    answers[pathIndex].found = true;
+                } else {
+                    currentMovePath.pop();
+                    isValid = false;
+                }
+                board.arrow_manager.draw(e.oldRank, e.oldFile, e.rank, e.file, board.color_values[board.highlight_colors.indexOf(color)])
+            }
+        }
+        
+        if (isValid) {
+            checkKnightJumpWin(currentMovePath);
+        } else {
+            board.move(e.to + e.from);
+        }
+    }
+    
+    function solveKnightJump(options)
+    {
+        var currentPositions = [{rank: options.startRank, file: options.startFile, path: []}];
+        var moves;        
+        /// Clear old answers
+        var validPaths = [];
+        var nextPositions;
+        var foundPath;
+        
+        for (;;) {
+            nextPositions = [];
+            currentPositions.forEach(function (pos)
+            {
+                moves = getAllKnightMoves(pos);
+                moves.forEach(function (move)
+                {
+                    var thisPath = [];
+                    thisPath = pos.path.concat([move]);
+                    if (move.rank === options.endRank && move.file === options.endFile) {
+                        foundPath = true;
+                        validPaths.push(thisPath);
+                    } else if (!foundPath) {
+                        nextPositions.push({path: thisPath, rank: move.rank, file: move.file});
+                    }
+                });
+            });
+            
+            if (foundPath) {
+                break;
+            } else {
+                currentPositions = nextPositions;
+            }
+        }
+        console.log(validPaths)
+        return validPaths;
+    }
+    
+    function startKnightJump()
+    {
+        var startRank = G.rand(0, 7);
+        var startFile = G.rand(0, 7);
+        var endRank = G.rand(0, 7);
+        var endFile = G.rand(0, 7);
+        
+        if (startRank === endRank && startFile === endFile) {
+            return startKnightJump();
+        }
+        
+        stop_game();
+        
+        board.clear();
+        
+        board.noRemoving = true;
+        
+        board.add_piece({
+            color: "w",
+            rank: startRank,
+            file: startFile,
+            type: "n"
+        });
+        
+        G.events.attach("board_human_move", watchKnightJump);
+        
+        board.enable_setup();
+        G.events.trigger("gameUnpaused");
+        
+        board.highlight_square(endFile, endRank, "blue");
+        
+        currentMovePath = [];
+        answers = solveKnightJump({startRank: startRank, startFile: startFile, endRank: endRank, endFile: endFile});
+        answers.startRank = startRank;
+        answers.startFile = startFile;
+    }
+    
     function start_new_game()
     {
         var dont_reset = board.get_mode() === "setup",
             stop_new_game;
         
         show_loading();
+        
+        G.events.detach("board_human_move", watchKnightSight);
         
         new_game_el.textContent = "New Game";
         setup_game_el.disabled = false;
@@ -1320,8 +1669,8 @@
     
     function create_center()
     {
-        new_game_el = G.cde("button", {t: "New Game"}, {click: start_new_game});
-        setup_game_el = G.cde("button", {t: "Setup Game"}, {click: init_setup});
+        new_game_el = G.cde("button", {t: "New Game"}, {click: function () {start_new()}});
+        setup_game_el = G.cde("button", {t: "Setup Game"}, {click: function () { init_setup}});
         
         center_el.appendChild(G.cde("documentFragment", [
             new_game_el,
@@ -1803,7 +2152,7 @@
             evaler.send("isready", function onready()
             {
                 if (board.get_mode() === "wait") {
-                    start_new_game();
+                    start_new();
                 }
             });
         });
@@ -1812,7 +2161,7 @@
     window.addEventListener("keydown", function catch_key(e)
     {
         if (e.keyCode === 113) { /// F2
-            start_new_game();
+            start_new();
         }
     });
     
