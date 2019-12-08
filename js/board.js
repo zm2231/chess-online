@@ -1,3 +1,5 @@
+/* exported BOARD */
+
 var BOARD = function board_init(el, options)
 {
     "use strict";
@@ -174,25 +176,69 @@ var BOARD = function board_init(el, options)
         });
     }
     
+    function is_piece_moveable(piece)
+    {
+        return board.mode === "setup" || (board.mode === "play" && board.turn === piece.color);
+    }
+    
+    function add_piece_events(piece)
+    {
+        piece.el.addEventListener("mousedown", function onpiece_mouse_down(e)
+        {
+            if (is_piece_moveable(piece)) {
+                board.dragging_piece = piece;
+                board.dragging_origin = {x: e.clientX, y: e.clientY};
+                piece.el.classList.add("dragging");
+            }
+        });
+    }
+    
+    function onmousemove(e)
+    {
+        var css;
+        
+        if (board.dragging_piece) {
+            //console.log(board.dragging_piece.color + board.dragging_piece.type, board.dragging_origin);
+            css = "translate(" + (e.clientX - board.dragging_origin.x) + "px," + (e.clientY - board.dragging_origin.y) + "px)";
+            board.dragging_piece.el.style.transform = css;
+            board.dragging_piece.el.style.WebkitTransform = css;
+        }
+    }
+    
+    function onmouseup(e)
+    {
+        if (board.dragging_piece) {
+            ///TODO: Move it
+            board.dragging_piece.el.classList.remove("dragging");
+            delete board.dragging_piece;
+            delete board.dragging_origin;
+        }
+    }
+    
     function set_board()
     {
         load_pieces_from_start();
         
-        pieces.forEach(function (piece)
+        pieces.forEach(function oneach(piece)
         {
-            var el = document.createElement("div");
+            if (!piece.el) {
+                piece.el = document.createElement("div");
+                
+                piece.el.classList.add("piece");
+                
+                piece.el.style.backgroundImage = "url(\"" + encodeURI("img/pieces/" + board.theme + "/" + piece.color + piece.type + (board.theme_ext || ".svg")) + "\")";
+                
+                add_piece_events(piece);
+            }
             
-            el.classList.add("piece");
-            
-            el.style.backgroundImage = "url(\"" + encodeURI("img/pieces/" + board.theme + "/" + piece.color + piece.type + (board.theme_ext || ".svg")) + "\")";
-            
-            squares[piece.rank][piece.file].appendChild(el);
+            squares[piece.rank][piece.file].appendChild(piece.el);
         });
     }
     
     board = {
         size_board: size_board,
         theme: "default",
+        mode: "setup",
     };
     
     options = options || {};
@@ -206,6 +252,9 @@ var BOARD = function board_init(el, options)
     create_board(el, options.dim);
     
     set_board();
+    
+    window.addEventListener("mousemove", onmousemove);
+    window.addEventListener("mouseup", onmouseup);
     
     return board;
 };
