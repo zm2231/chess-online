@@ -265,8 +265,8 @@
         player1_el.style.width = el_width + "px";
         player2_el.style.width = el_width + "px";
         
-        clock_manager.clock_els.w.style.width = el_width + "px";
-        clock_manager.clock_els.b.style.width = el_width + "px";
+        clock_manager.clock_els.w.style.width = (el_width - 10) + "px";
+        clock_manager.clock_els.b.style.width = (el_width - 10) + "px";
     }
     
     function onresize()
@@ -396,6 +396,12 @@
         }
     }
     
+    function pause_game()
+    {
+        board.wait();
+        G.events.trigger("gamePaused");
+    }
+    
     function set_legal_moves(cb)
     {
         get_legal_moves(function onget(moves)
@@ -412,7 +418,7 @@
                     cb();
                 }
             } else {
-                board.legal_moves = [];
+                board.legal_moves = {};
                 if (board.mode === "play") {
                     /// Was it checkmate?
                     //return start_new_game();
@@ -431,8 +437,7 @@
                             alert("Stalemate!");
                         }
                     }
-                    board.wait();
-                    G.events.trigger("gamePaused");
+                    pause_game();
                 }
             }
         });
@@ -475,7 +480,18 @@
         board.move(move);
         set_ai_position();
         
-        set_legal_moves(tell_engine_to_move);
+        /// Clear legal moves to indicate that we are between moves. (This is used by the clock manager to determine if it should look call the flag.)
+        board.legal_moves = {};
+        
+        /// Wait until we set legal moves. It's only fair.
+        clock_manager.stop_timer();
+        set_legal_moves(function onset()
+        {
+            if (board.mode === "play") {
+                clock_manager.start_timer();
+            }
+            tell_engine_to_move();
+        });
         
         G.events.trigger("move");
     }
@@ -885,16 +901,18 @@
             
             change_selected(player.els.time_type, type);
             
-            player.time_type = type;
-            
-            if (type === "sd") {
-                player.els.sd_container.style.display = "block";
-                player.set_sd_time();
-            } else {
-                player.els.sd_container.style.display = "none";
-                player.time = "";
-                player.start_time = "";
-                clock_manager.clear(player.color);
+            if (player.time_type !== type) {
+                player.time_type = type;
+                
+                if (type === "sd") {
+                    player.els.sd_container.style.display = "block";
+                    player.set_sd_time();
+                } else {
+                    player.els.sd_container.style.display = "none";
+                    player.time = "";
+                    player.start_time = "";
+                    clock_manager.clear(player.color);
+                }
             }
         }
         
@@ -923,7 +941,7 @@
             if (time_val !== player.start_time) {
                 player.time = time_val;
                 player.start_time = time_val;
-                clock_manager.update_clock(player.color)
+                clock_manager.update_clock(player.color);
             }
         }
         
@@ -1054,8 +1072,7 @@
             loading_el.classList.remove("hidden");
         }
         
-        board.wait();
-        G.events.trigger("gamePaused");
+        pause_game();
     }
     
     function init()
@@ -1120,7 +1137,6 @@
                 w: G.cde("div", {c: "clock clock_white"}),
                 b: G.cde("div", {c: "clock clock_black"}),
             },
-            
             clock_manager = {},
             timer_on;
         
@@ -1136,15 +1152,19 @@
             if (player.time_type !== "none") {
                 player.time -= diff;
                 update_clock(player.color);
-                if (player.time < 0) {
+                /// Has someone's time run out?
+                /// Also, make sure that the system has time to check to see if the game has already ended (either by checkmake or stalemate) by checking for legal moves.
+                if (player.time < 0 && (board.legal_moves && board.legal_moves.uci && board.legal_moves.uci.length)) {
+                    /// If the player with time is almost beaten (or the game is almost a stalemate) call it a stalemate.
                     if (is_insufficient_material(player.color === "w" ? "b" : "w")) {
                         alert("Stalemate: Player with time has insufficient material");
                     } else {
                         alert((player.color === "w" ? "White" : "Black") + " loses on time.");
                     }
+                    /// Stop player from moving.
                     stop_game();
-                    board.wait();
-                    G.events.trigger("gamePaused");
+                    /// Disable board play.
+                    pause_game();
                 }
             }
         }
@@ -1152,7 +1172,7 @@
         function start_timer()
         {
             /// Don't start the timer if the game has not yet begun.
-            if (board.messy) {
+            if (board.messy && !timer_on) {
                 last_time = Date.now();
                 tick_timer = setInterval(tick, 50);
                 timer_on = true;
@@ -1175,7 +1195,7 @@
                 day;
             
             time = parseFloat(time);
-            //console.log(time);
+            
             if (time < 0) {
                 sign = "-"
             }
@@ -1185,7 +1205,7 @@
                 res = (time / 1000).toFixed(3); /// Show decimal
             } else if (time < 60000) { /// Less than 1 minute
                 /// Always floor since we don't want to round to 60.
-                res = Math.floor(time / 1000);
+                res = "0:" + Math.floor(time / 1000);
             } else if (time < 3600000) { /// Less than 1 hour
                 //debugger;
                 /// Always floor since we don't want to round to 60.
@@ -1195,6 +1215,42 @@
                     sec = "0" + sec;
                 }
                 res = min + ":" + sec;
+            } else if (time < 86400000) { /// Less than 1 day
+                /// Always floor since we don't want to round to 60.
+                sec  = Math.floor((time % 60000) / 1000);
+                hour = Math.floor(time / 60000);
+                min  = Math.floor(hour % 60);
+                hour = (hour - min) / 60;
+                
+                if (sec < 10) {
+                    sec = "0" + sec;
+                }
+                if (min < 10) {
+                    min = "0" + min;
+                }
+                
+                res = hour + ":" + min + ":" + sec;
+                
+            } else { /// Days
+                /// Always floor since we don't want to round to 60.
+                sec  = Math.floor((time % 60000) / 1000);
+                hour = Math.floor(time / 60000);
+                min  = Math.floor(hour % 60);
+                hour = (hour - min) / 60;
+                day = Math.floor(hour / 24);
+                hour = hour % 24;
+                
+                if (sec < 10) {
+                    sec = "0" + sec;
+                }
+                if (min < 10) {
+                    min = "0" + min;
+                }
+                if (hour < 10) {
+                    hour = "0" + hour;
+                }
+                
+                res = day + ":" + hour + ":" + min + ":" + sec;
             }
             
             return sign + res;
@@ -1226,9 +1282,12 @@
         clock_manager.clear = function clear(color)
         {
             if (clock_els[color]) {
-                clock_els[color].textContent = "";
+                clock_els[color].textContent = "--";
             }
         }
+        
+        clock_manager.start_timer = start_timer;
+        clock_manager.stop_timer = stop_timer;
         
         return clock_manager;
     }());
