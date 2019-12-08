@@ -3,14 +3,14 @@
     "use strict";
     
     var board = BOARD("board"),
-        game = {},
         zobrist_keys,
         stalemate_by_rules,
         evaler,
         loading_el,
         player1_el = document.createElement("div"),
         player2_el = document.createElement("div"),
-        starting_new_game;
+        starting_new_game,
+        retry_move_timer;
     
     function array_remove(arr, i, order_irrelevant)
     {
@@ -60,10 +60,7 @@
     function load_engine()
     {
         var worker = new Worker("js/stockfish.js"),
-            engine = {
-                ai_thinking: 0,
-                discard_move: 0
-            },
+            engine = {},
             que = [];
         
         function get_first_word(line)
@@ -174,7 +171,7 @@
             ///      E.g., "go depth 20" followed later by "uci"
             
             if (done) {
-                if (my_que.cb) {
+                if (my_que.cb && !my_que.discard) {
                     my_que.cb(my_que.message);
                 }
                 
@@ -192,6 +189,7 @@
                 return;
             }
             
+            /// Debugging
             console.log(cmd);
             
             /// Only add a que for commands that always print.
@@ -205,6 +203,26 @@
             }
             worker.postMessage(cmd);
         };
+        
+        engine.stop_moves = function stop_moves()
+        {
+            var i,
+                len = que.length;
+            
+            for (i = 0; i < len; i += 1) {
+                console.log(i, get_first_word(que[i].cmd))
+                /// We found a move than has not been stopped yet.
+                if (get_first_word(que[i].cmd) === "go" && !que[i].discard) {
+                    engine.send("stop");
+                    que[i].discard = true;
+                }
+            }
+        }
+        
+        engine.get_cue_len = function get_cue_len()
+        {
+            return que.length;
+        }
         
         return engine;
     }
@@ -382,6 +400,7 @@
                 board.legal_moves = [];
                 if (board.mode === "play") {
                     /// Was it checkmate?
+                    //return start_new_game();
                     if (moves.checkers.length && !stalemate_by_rules) {
                         alert((board.turn === "b" ? "Black" : "White") + " is checkmated!");
                     } else {
@@ -405,27 +424,35 @@
     
     function onengine_move(str)
     {
-        var res = str.match(/^bestmove\s(\S+)(?:\sponder\s(\S+))?/);
-        
-        board.players[board.turn].engine.ai_thinking -= 1;
-        
-        if (board.players[board.turn].engine.discard_move) {
-            board.players[board.turn].engine.discard_move -= 1;
-            if (board.players[board.turn].engine.discard_move < 0) {
-                console.log("Too many discard_move's: " + board.players[board.turn].engine.discard_move);
-                board.players[board.turn].engine.discard_move = 0;
-            }
-            return;
-        }
+        var res = str.match(/^bestmove\s(\S+)(?:\sponder\s(\S+))?/),
+            player = board.players[board.turn],
+            move,
+            ponder;
         
         if (!res) {
             error("Can't get move: " + str);
         }
         
-        ///TODO: Allow ponder.
-        game.ai_ponder = res[2];
+        if (!board.is_legal_move(res[1])) {
+            console.log("!!!!!!!!!!!!!!!!!!!!!!!!");
+            console.log("ILLEGAL MOVE: " + res[1]);
+            console.log("!!!!!!!!!!!!!!!!!!!!!!!!");
+            
+            if (!board.legal_moves || !board.legal_moves.uci) {
+                error("Cannot find a legal move");
+            }
+            /// Just use the first legal move
+            move = board.legal_moves.uci[0];
+            ponder = "";
+        } else {
+            move = res[1];
+            ponder = res[2];
+        }
         
-        board.move(res[1]);
+        ///TODO: Allow ponder.
+        player.engine.ponder_move = ponder;
+        
+        board.move(move);
         set_ai_position();
         
         set_legal_moves(tell_engine_to_move);
@@ -457,15 +484,27 @@
     
     function tell_engine_to_move()
     {
-        var default_time = 500000,
+        ///NOTE: Without time, it thinks really fast. So, we give it a something to make it move reasonably quickly.
+        var default_time = 1000 * 60 * 2, /// 2 minutes
             wtime,
             btime,
-            depth;
+            depth,
+            player = board.players[board.turn];
         
-        if (board.players[board.turn].type === "ai") {
-            board.players[board.turn].engine.ai_thinking += 1;
+        if (player.type === "ai") {
+            if (!player.engine.loaded || !player.engine.ready) {
+                show_loading();
+                return retry_move_timer = setInterval(function onretry()
+                {
+                    if (player.engine.loaded && player.engine.ready) {
+                        hide_loading();
+                        clearInterval(retry_move_timer);
+                        tell_engine_to_move();
+                    }
+                }, 100);
+            }
             //uciCmd("go " + (time.depth ? "depth " + time.depth : "") + " wtime " + time.wtime + " winc " + time.winc + " btime " + time.btime + " binc " + time.binc);
-            /// Without time, it thinks really fast.
+            
             //engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 1800000 btime 1800000" , onengine_move, onthinking);
             //engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 200000 btime 200000" , onengine_move, onthinking);
             if (board.players.w.time_type === "none") {
@@ -484,12 +523,14 @@
             
             /// If there's no time limit, limit the depth on some players.
             ///NOTE: There's no reason not to limit depth 1 since it's always fast.
-            if (board.players[board.turn].time_type === "none" || Number(board.players[board.turn].engine.depth) === 1) {
-                depth = board.players[board.turn].engine.depth;
+            //if (player.time_type === "none" || Number(player.engine.depth) === 1) {
+            if (player.time_type === "none") {
+                depth = player.engine.depth;
             }
             
+            //depth = 1;
             
-            board.players[board.turn].engine.send("go " + (typeof depth !== "undefined" ? "depth " + depth : "") + " wtime " + wtime + " btime " + btime , onengine_move, onthinking);
+            player.engine.send("go " + (typeof depth !== "undefined" ? "depth " + depth : "") + " wtime " + wtime + " btime " + btime , onengine_move, onthinking);
             return true;
         }
     }
@@ -502,53 +543,95 @@
         set_legal_moves(tell_engine_to_move);
     }
     
-    function stop_ai(engine)
+    function all_ready(cb)
     {
-        /// Is the engine currently thinking of a move.
-        if (engine && engine.ai_thinking) {
-            /// Discard the result of the thinking.
-            engine.discard_move += 1;
-            engine.send("stop");
+        function ready_black()
+        {
+            if (board.players.b.type === "ai") {
+                board.players.b.engine.send("isready", cb);
+            } else {
+                cb();
+            }
         }
+        
+        evaler.send("isready", function evaler_ready()
+        {
+            if (board.players.w.type === "ai") {
+                board.players.w.engine.send("isready", ready_black);
+            } else {
+                ready_black();
+            }
+        });
+    }
+    
+    function all_flushed(cb)
+    {
+        function wait()
+        {
+            setTimeout(function retry()
+            {
+                all_flushed(cb);
+            }, 100);
+        }
+        
+        if (evaler.get_cue_len()) {
+            return wait();
+        }
+        
+        if (board.players.w.type === "ai" && board.players.w.engine.get_cue_len()) {
+            return wait();
+        }
+        
+        if (board.players.b.type === "ai" && board.players.b.engine.get_cue_len()) {
+            return wait();
+        }
+        
+        all_ready(cb);
     }
     
     function start_new_game()
     {
-        if (!evaler.ready || starting_new_game) {
+        if (starting_new_game) {
             return;
         }
         
         starting_new_game = true;
         
-        zobrist_keys = [];
-        stalemate_by_rules = null;
+        /// Prevent possible future moves.
+        clearInterval(retry_move_timer);
+        
+        ///TODO: Need a better loading thing for each indivually.
+        if (board.players.w.type === "ai") {
+            board.players.w.engine.stop_moves();
+            board.players.w.engine.send("ucinewgame");
+        }
+        if (board.players.b.type === "ai") {
+            board.players.b.engine.stop_moves();
+            board.players.b.engine.send("ucinewgame");
+        }
+        
+        show_loading();
         
         if (board.messy) {
             board.set_board();
         }
         
+        zobrist_keys = [];
+        stalemate_by_rules = null;
         
         evaler.send("ucinewgame");
         
-        ///TODO: Need a better loading thing for each indivually.
-        if (board.players.w.type === "ai") {
-            stop_ai(board.players.w.engine);
-            board.players.w.engine.send("ucinewgame");
-        }
-        if (board.players.b.type === "ai") {
-            board.players.b.engine.send("ucinewgame");
-            stop_ai(board.players.b.engine);
-        }
-        
-        set_ai_position();
-        //engine.send("position fen 6R1/1pp5/5k2/p1b4r/P1P2p2/1P5r/4R2P/7K w - - 0 39");
-        //board.moves = "e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4 e5d4 e1g1 f6e4 f1e1 d7d5 c4d5 d8d5 b1c3 d5c4 c3e4 c8e6 b2b3 c4d5 c1g5 f8b4 c2c3 f7f5 e4d6 b4d6 c3c4 d5c5 d1e2 e8g8 e2e6 g8h8 a1d1 f5f4 e1e4 c5a5 e4e2 a5f5 e6f5 f8f5 g5h4 a8f8 d1d3 h7h6 f3d4 c6d4 d3d4 g7g5 h4g5 h6g5 g1f1 g5g4 f2f3 g4f3 g2f3 h8g7 a2a4 f8h8 f1g2 g7f6 g2h1 h8h3 d4d3 d6c5 e2b2 f5g5 b2b1 a7a5 b1f1 c5e3 f1e1 h3f3 d3d8 g5h5 d8g8 f3h3 e1e2 e3c5".split(" ");
-        set_legal_moves(function onset()
+        all_flushed(function start_game()
         {
-            loading_el.classList.add("hidden");
-            board.play();
-            tell_engine_to_move();
-            starting_new_game = false;
+            set_ai_position();
+            //engine.send("position fen 6R1/1pp5/5k2/p1b4r/P1P2p2/1P5r/4R2P/7K w - - 0 39");
+            //board.moves = "e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4 e5d4 e1g1 f6e4 f1e1 d7d5 c4d5 d8d5 b1c3 d5c4 c3e4 c8e6 b2b3 c4d5 c1g5 f8b4 c2c3 f7f5 e4d6 b4d6 c3c4 d5c5 d1e2 e8g8 e2e6 g8h8 a1d1 f5f4 e1e4 c5a5 e4e2 a5f5 e6f5 f8f5 g5h4 a8f8 d1d3 h7h6 f3d4 c6d4 d3d4 g7g5 h4g5 h6g5 g1f1 g5g4 f2f3 g4f3 g2f3 h8g7 a2a4 f8h8 f1g2 g7f6 g2h1 h8h3 d4d3 d6c5 e2b2 f5g5 b2b1 a7a5 b1f1 c5e3 f1e1 h3f3 d3d8 g5h5 d8g8 f3h3 e1e2 e3c5".split(" ");
+            set_legal_moves(function onset()
+            {
+                starting_new_game = false;
+                hide_loading();
+                tell_engine_to_move();
+            });
         });
     }
     //setInterval(start_new_game, 30000);
@@ -577,6 +660,12 @@
                     if (player.type === "ai") {
                         if (!player.engine) {
                             player.engine = load_engine();
+                            ///NOTE: This shows that it's loaded so that we know that it can move.
+                            player.engine.send("uci", function onload()
+                            {
+                                /// Make sure it's all ready too.
+                                player.engine.send("isready");
+                            }); 
                         }
                         
                         /// Set the AI level if not already.
@@ -588,7 +677,9 @@
                         }
                         player.els.level.style.display = "inline";
                     } else {
-                        stop_ai(player.engine);
+                        if (player.engine) {
+                            player.engine.stop_moves();
+                        }
                         player.els.level.style.display = "none";
                     }
                 }
@@ -620,6 +711,7 @@
                 level = 20;
             }
             
+            /// Nothing to change.
             if (level === player.engine.level) {
                 return false;
             }
@@ -633,14 +725,6 @@
                 depth = "3";
             } else if (level < 8) {
                 depth = "4";
-            } else if (level < 10) {
-                depth = "5";
-            } else if (level < 12) {
-                depth = "6";
-            } else if (level < 14) {
-                depth = "8";
-            } else if (level < 16) {
-                depth = "10";
             }
             
             player.engine.level = level;
@@ -654,7 +738,7 @@
                 ///NOTE: Stockfish level 20 does not make errors (intentially), so these numbers have no effect on level 20.
                 /// Level 0 starts at 1
                 err_prob = Math.round((level * 6.35) + 1);
-                /// Level 0 starts at 10
+                /// Level 0 starts at 5
                 max_err = Math.round((level * -0.25) + 5);
                 
                 player.engine.err_prob = err_prob;
@@ -662,6 +746,9 @@
                 
                 player.engine.send("setoption name Skill Level Maximum Error value " + max_err);
                 player.engine.send("setoption name Skill Level Probability value " + err_prob);
+                
+                ///NOTE: Could clear the hash to make the player more like it's brand new.
+                /// player.engine.send("setoption name Clear Hash");
             }
         }
         
@@ -876,22 +963,34 @@
         board.players.b.set_time_type("none");
     }
     
+    function hide_loading()
+    {
+        loading_el.classList.add("hidden");
+        board.play();
+    }
+    
+    function show_loading()
+    {
+        if (!loading_el) {
+            loading_el = G.cde("div", {t: "Loading...", c: "loading"});
+            
+            document.documentElement.appendChild(loading_el);
+        } else {
+            loading_el.classList.remove("hidden");
+        }
+        
+        board.wait();
+    }
+    
     function init()
     {
         onresize();
         
         window.addEventListener("resize", onresize);
         
-        loading_el = document.createElement("div");
-        
-        loading_el.textContent = "Loading...";
-        loading_el.classList.add("loading");
-        
-        document.documentElement.appendChild(loading_el);
+        show_loading();
         
         create_players();
-        
-        board.wait();
         
         board.onmove = onmove;
         
