@@ -8,8 +8,8 @@
     var stalemate_by_rules;
     var evaler;
     var loading_el;
-    var player1_el = G.cde("div", {c: "player player_white"});
-    var player2_el = G.cde("div", {c: "player player_black"});
+    var player1_el = G.cde("div", {c: "player player_white player_left"});
+    var player2_el = G.cde("div", {c: "player player_black player_right"});
     var center_el  = G.cde("div", {c: "center_el"});
     var rating_slider;
     var new_game_el;
@@ -27,6 +27,8 @@
     var rating_font_style = "Impact,monospace,mono,sans-serif";
     var font_fit = FONT_FIT({fontFamily: rating_font_style});
     var moves_el;
+    var layout = {};
+    var default_sd_time = "15:00";
     
     function error(str)
     {
@@ -251,16 +253,16 @@
         
         el_width = Math.floor((window.innerWidth - width) / 2) - 10;
         
-        player1_el.style.width = el_width + "px";
-        player2_el.style.width = el_width + "px";
+        //player1_el.style.width = el_width + "px";
+        //player2_el.style.width = el_width + "px";
         
-        clock_manager.clock_els.w.style.width = el_width + "px";
-        clock_manager.clock_els.b.style.width = el_width + "px";
+        //clock_manager.clock_els.w.style.width = el_width + "px";
+        //clock_manager.clock_els.b.style.width = el_width + "px";
     }
     
     function resize_center()
     {
-        center_el.style.width = calculate_board_size() + "px";
+        //center_el.style.width = calculate_board_size() + "px";
     }
     
     function onresize()
@@ -1203,13 +1205,20 @@
     {
         function set_sd_time(time)
         {
-            var time_val;
+            var time_val,
+                using_el;
             
             if (typeof time === "undefined") {
                 time = player.els.sd.value;
+                using_el = true;
             }
             
             time_val = time_from_str(time);
+            
+            if (!time_val && using_el) {
+                player.els.sd.value = default_sd_time;
+                time_val = time_from_str(default_sd_time);
+            }
             
             if (time_val && time_val !== player.start_time) {
                 player.time = time_val;
@@ -1264,6 +1273,7 @@
         ///
         var time_container = G.cde("div");
         var sd_container = G.cde("div");
+        var time_control_el = G.cde("div", [sd_container]);
         
         if (!player.time) {
             player.time = {};
@@ -1274,7 +1284,7 @@
             G.cde("option", {t: "Sudden Death", value: "sd", selected: player.time.type === "sd"}),
         ]);
         
-        var sd_el = G.cde("input", {type: "text", value: player.time.sd || "15:00"}, {all_on_changes: make_set_sd_time(player)});
+        var sd_el = G.cde("input", {type: "text", value: player.time.sd || default_sd_time}, {all_on_changes: make_set_sd_time(player)});
         
         sd_container.appendChild(G.cde("", [
             "Time: ",
@@ -1284,7 +1294,8 @@
         time_container.appendChild(G.cde("", [
             "Time type: ",
             time_type_el,
-            sd_container,
+            //sd_container,
+            time_control_el,
         ]));
         
         ///
@@ -1302,6 +1313,7 @@
             time_type: time_type_el,
             sd_container: sd_container,
             sd: sd_el,
+            time_control_el: time_control_el,
         };
     }
     
@@ -1313,8 +1325,10 @@
         add_player_els(player1_el, board.players.w);
         add_player_els(player2_el, board.players.b);
         
-        board.el.parentNode.insertBefore(player1_el, board.el);
-        board.el.parentNode.insertBefore(player2_el, board.el.nextSibling);
+        layout.rows[1].cells[0].appendChild(player1_el);
+        layout.rows[1].cells[2].appendChild(player2_el);
+        //board.el.parentNode.insertBefore(player1_el, board.el);
+        //board.el.parentNode.insertBefore(player2_el, board.el.nextSibling);
         
         board.players.w.set_type("human");
         board.players.b.set_type("ai");
@@ -1333,7 +1347,8 @@
             setup_game_el,
         ]));
         
-        board.el.parentNode.insertBefore(center_el, null);
+        //board.el.parentNode.insertBefore(center_el, null);
+        layout.rows[2].cells[1].appendChild(center_el);
     }
     
     function make_clocks()
@@ -1341,8 +1356,8 @@
         var last_time,
             tick_timer,
             clock_els = {
-                w: G.cde("div", {c: "clock clock_white"}),
-                b: G.cde("div", {c: "clock clock_black"}),
+                w: G.cde("div", {c: "clock clock_white clock_left"}),
+                b: G.cde("div", {c: "clock clock_black clock_right"}),
             },
             clock_manager = {},
             timer_on;
@@ -1505,8 +1520,10 @@
             }
         };
         
-        board.el.parentNode.insertBefore(clock_els.w, board.el);
-        board.el.parentNode.insertBefore(clock_els.b, board.el.nextSibling);
+        //board.el.parentNode.insertBefore(clock_els.w, board.el);
+        //board.el.parentNode.insertBefore(clock_els.b, board.el.nextSibling);
+        layout.rows[2].cells[0].appendChild(clock_els.w);
+        layout.rows[2].cells[2].appendChild(clock_els.b);
         
         G.events.attach("gameUnpaused", start_timer);
         G.events.attach("firstMove", start_timer);
@@ -1591,11 +1608,16 @@
         
         obj.resize = function ()
         {
-            var board_rect = board.el.getBoundingClientRect();
-            container.style.top = board_rect.top + "px";
-            container.style.bottom = (window.innerHeight - board_rect.bottom) + "px";
-            container.style.right = (window.innerWidth - board_rect.left) + "px";
-            container.style.left = (board_rect.left - (board_rect.width / 16)) + "px";
+            //var board_rect = board.el.getBoundingClientRect();
+            //console.log(board_rect)
+            //container.style.top = board_rect.top + "px";
+            //container.style.bottom = (window.innerHeight - board_rect.bottom) + "px";
+            //container.style.right = (window.innerWidth - board_rect.left) + "px";
+            //container.style.left = (board_rect.left - (board_rect.width / 16)) + "px";
+            //container.style.width = (board_rect.width / 16) + "px";
+            //container.style.height = board_rect.height - 4 + "px";
+            container.style.width = (board.el.clientWidth / 16) + "px";
+            container.style.height = board.el.clientHeight + "px";
             ///NOTE: clientWidth/clientHeight gets the width without the board.
             canvas.width = container.clientWidth;
             canvas.height = container.clientHeight;
@@ -1616,7 +1638,9 @@
         
         container.appendChild(slider_el);
         
-        board.el.parentNode.insertBefore(container, board.el);
+        //board.el.parentNode.insertBefore(container, board.el);
+        //layout.rows[1].cells[.appendChild(container);
+        layout.center_cells[0].appendChild(container);
     
         G.events.attach("eval", function oneval(e)
         {
@@ -1648,7 +1672,7 @@
         function resize()
         {
             var size = board.board_details.width;
-            var rect = player2_el.getBoundingClientRect();
+            //var rect = player2_el.getBoundingClientRect();
             
             console.log(size)
             console.log(rect)
@@ -1681,13 +1705,52 @@
         pause_game();
     }
     
+    function create_table()
+    {
+        var table_info = [3, 3, 3];
+        
+        layout.table = G.cde("div", {c: "table"});
+        layout.rows = [];
+        
+        table_info.forEach(function oneach(count, row)
+        {
+            var i;
+            
+            layout.rows[row] = {
+                cells: [],
+            };
+            for (i = 0; i < count; i += 1) {
+                layout.rows[row].cells[i] = G.cde("div", {c: "td table_cell_" + row + "_" + i});
+                
+            }
+            layout.rows[row].el = G.cde("div", {c: "tr table_row_" + row}, layout.rows[row].cells);
+            layout.table.appendChild(layout.rows[row].el);
+        });
+        
+        layout.center_cells = [
+            G.cde("div", {c: "td center_td"}),
+            G.cde("div", {c: "td center_td"}),
+        ];
+        layout.center_cells[0].align = "right";
+        layout.center_cells[1].align = "left";
+        layout.center_row   = G.cde("div", {c: "tr center_tr"}, layout.center_cells);
+        layout.center_table = G.cde("div", {c: "table center_table"}, [layout.center_row]);
+        layout.rows[1].cells[1].appendChild(layout.center_table);
+    }
+    
     function init()
     {
         if (typeof Worker === "undefined") {
             return alert("Sorry, Kingdom does not support this browser.");
         }
         
-        document.body.appendChild(board_el);
+        create_table();
+        
+        document.body.appendChild(layout.table);
+        
+        layout.rows[1].cells[1].align = "center";
+        //layout.rows[1].cells[1].appendChild(board_el);
+        layout.center_cells[1].appendChild(board_el);
         
         clock_manager = make_clocks();
         
