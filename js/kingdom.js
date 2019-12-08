@@ -30,7 +30,8 @@
     var layout = {};
     var default_sd_time = "15:00";
     var showing_loading;
-    var gameType = "knightJump";
+    var gameType = "standard";
+    var lastGameType;
     var answers;
     var currentMovePath;
     
@@ -873,6 +874,8 @@
         } else if (gameType === "knightJump") {
             startKnightJump();
         }
+        
+        lastGameType = gameType;
     }
     
     function getAllKnightMoves(options)
@@ -914,7 +917,6 @@
         
         for (i = 0; i < len; i += 1) {
             if (!answers[i].found) {
-                board.move(e.to + e.from);
                 return false;
             }
         }
@@ -1002,19 +1004,27 @@
         answers = getAllKnightMoves({rank: randRank, file: randFile});
     }
     
-    function indexOfPath(validPaths, path, depth)
+    function indexOfPath(validPaths, path, depth, selectedAnswer)
     {
-        var i;
+        var i = 0;
         var len = validPaths.length;
+        var deeperIndex;
+        if (typeof selectedAnswer === "number") {
+            i = selectedAnswer;
+            len = selectedAnswer + 1;
+        }
         depth = depth || 0;
         
-        for (i = 0; i < len; i += 1) {
-            if (validPaths[i].length > depth && path.length > depth) {
+        for (; i < len; i += 1) {
+            if (!validPaths[i].found && validPaths[i].length > depth && path.length > depth) {
                 if (validPaths[i][depth].rank === path[depth].rank && validPaths[i][depth].file === path[depth].file) {
                     if (depth === path.length - 1) {
                         return i;
                     } else {
-                        return indexOfPath(validPaths, path, depth + 1);
+                        deeperIndex = indexOfPath(validPaths, path, depth + 1, i);
+                        if (deeperIndex === i) {
+                            return i;
+                        }
                     }
                 }
             }
@@ -1094,7 +1104,6 @@
         var found_already;
         var moves = getAllKnightMoves({rank: e.oldRank, file: e.oldFile});
         var len = moves.length;
-        console.log(moves)
         var isValid;
         var pathIndex;
         
@@ -1112,7 +1121,9 @@
                 pathIndex = indexOfPath(answers, currentMovePath);
                 if (pathIndex > -1) {
                     color = "green";
-                    answers[pathIndex].found = true;
+                    if (currentMovePath.length === answers[0].length) {
+                        answers[pathIndex].found = true;
+                    }
                 } else {
                     currentMovePath.pop();
                     isValid = false;
@@ -1161,7 +1172,6 @@
                 currentPositions = nextPositions;
             }
         }
-        console.log(validPaths)
         return validPaths;
     }
     
@@ -1204,7 +1214,7 @@
     
     function start_new_game()
     {
-        var dont_reset = board.get_mode() === "setup",
+        var dont_reset = lastGameType === "standard" && board.get_mode() === "setup",
             stop_new_game;
         
         show_loading();
@@ -1667,14 +1677,25 @@
         board.players.b.set_time_type("none");
     }
     
+    function changeType()
+    {
+        gameType = this.value;
+    }
+    
     function create_center()
     {
         new_game_el = G.cde("button", {t: "New Game"}, {click: function () {start_new()}});
         setup_game_el = G.cde("button", {t: "Setup Game"}, {click: function () { init_setup}});
+        var gameTypeSel = G.cde("Select", {oninput: changeType}, [
+            G.cde("option", {value: "standard", t: "Standard", selected:"selected"}),
+            G.cde("option", {value: "knightSight", t: "Knight Sight"}),
+            G.cde("option", {value: "knightJump", t: "Knight Jump"}),
+        ]);
         
         center_el.appendChild(G.cde("documentFragment", [
             new_game_el,
             setup_game_el,
+            gameTypeSel,
         ]));
         
         layout.rows[2].cells[1].appendChild(center_el);
