@@ -72,6 +72,7 @@
             }
             ///NOTE: Stockfish.js does not support the "debug" or "register" commands.
             ///TODO: Add support for "perft", "bench", and "key" commands.
+            ///TODO: Get welcome message so that it does not get caught with other messages.
             
             if (done) {
                 if (que[0].cb) {
@@ -126,19 +127,30 @@
         {
             var san = str.match(/Legal moves\:(.*)/),
                 uci = str.match(/Legal uci moves\:(.*)/),
-                checkers = str.match(/Checkers\:(.*)/);
-            
-            console.log(str);
+                checkers = str.match(/Checkers\:(.*)/),
+                res;
             
             if (!san || !uci || !checkers) {
                 error("Invalid d response: " + str);
             }
             
-            cb({
+            res = {
                 san: san[1].trim().split(" "),
                 uci: uci[1].trim().split(" "),
                 checkers: checkers[1].trim().split(" "),
-            });
+            };
+            
+            if (res.san.length === 1 && res.san[0] === "") {
+                res.san = [];
+            }
+            if (res.uci.length === 1 && res.uci[0] === "") {
+                res.uci = [];
+            }
+            if (res.checkers.length === 1 && res.checkers[0] === "") {
+                res.checkers = [];
+            }
+            
+            cb(res);
             
         });
     }
@@ -154,11 +166,14 @@
                     cb();
                 }
             } else {
-                /// Was it checkmate?
-                if (moves.checkers.length) {
-                    alert("Checkmate!");
-                } else {
-                    alert("Stalemate!");
+                if (board.mode === "play") {
+                    /// Was it checkmate?
+                    if (moves.checkers.length) {
+                        alert("Checkmate!");
+                    } else {
+                        alert("Stalemate!");
+                    }
+                    board.wait();
                 }
             }
         });

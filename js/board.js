@@ -272,6 +272,10 @@ var BOARD = function board_init(el, options)
     {
         ///TODO: Determine how to underpromote.
         ///      We should first make sure it's a legal move before even asking.
+        if (!board.legal_moves) {
+            return false;
+        }
+        
         return board.legal_moves.uci.indexOf(uci) > -1;
     }
     
@@ -291,7 +295,7 @@ var BOARD = function board_init(el, options)
             
             delete board.legal_moves;
             
-            if (board.onmove) {
+            if (board.mode === "play" && board.onmove) {
                 board.onmove(move);
             }
         }
@@ -322,7 +326,9 @@ var BOARD = function board_init(el, options)
         }
         
         /// Is it castling?
-        san = board.legal_moves.san[board.legal_moves.uci.indexOf(uci)];
+        if (board.legal_moves) {
+            san = board.legal_moves.san[board.legal_moves.uci.indexOf(uci)];
+        }
         if (san === "O-O") { /// Kingside castle
             rook = get_piece_from_rank_file(rook_rank, 7);
             squares[rook_rank][5].appendChild(rook.el);
@@ -340,6 +346,11 @@ var BOARD = function board_init(el, options)
         ///TODO: Promotion
     }
     
+    function is_promoting(piece, square)
+    {
+        return piece.type === "p" && square.rank % board_details.ranks - 1 === 0;
+    }
+    
     function onmouseup(e)
     {
         var square,
@@ -351,9 +362,9 @@ var BOARD = function board_init(el, options)
             
             uci = get_move(board.dragging.piece, square);
             
-            if (square && is_legal_move(uci)) {
-                move_piece(board.dragging.piece, square, uci)
-                report_move(uci, square.rank === 7);
+            if (square && (board.mode === "setup" || is_legal_move(uci))) {
+                move_piece(board.dragging.piece, square, uci);
+                report_move(uci, is_promoting(board.dragging.piece, square));
             } else {
                 /// Snap back.
                 ///TODO: Be able to remove pieces in setup mode.
