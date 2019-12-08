@@ -10,7 +10,9 @@
         player1_el = document.createElement("div"),
         player2_el = document.createElement("div"),
         starting_new_game,
-        retry_move_timer;
+        retry_move_timer,
+        clock_manager,
+        pieces_moved;
     
     function array_remove(arr, i, order_irrelevant)
     {
@@ -262,6 +264,9 @@
         
         player1_el.style.width = el_width + "px";
         player2_el.style.width = el_width + "px";
+        
+        clock_manager.clock_els.w.style.width = el_width + "px";
+        clock_manager.clock_els.b.style.width = el_width + "px";
     }
     
     function onresize()
@@ -318,16 +323,50 @@
         });
     }
     
-    function is_stalemate_by_rule(fen, key)
+    function is_insufficient_material(color)
     {
         var i,
-            count = 1,
             piece_counts = {
                 knights: 0,
                 bishops: 0,
                 light_bishops: 0
             },
             piece_type;
+        
+        /// Check insufficient material
+        /// 1. Only Kings
+        /// 2. Kings and one knight
+        /// 3. Kings and any number of bishops on either or one side all of which are on the same color
+        ///NOTE: Could examine the fen position too, but it would take a little more work to determine bishop color.
+        if (board.pieces) {
+            for (i = board.pieces.length - 1; i >= 0; i -= 1) {
+                /// Make sure the piece is on the board and it is one that we are counting.
+                if (!board.pieces[i].captured && (!color || board.pieces[i].color === color)) {
+                    piece_type = board.pieces[i].type;
+                    if (piece_type === "p" || piece_type === "r" || piece_type === "q") {
+                        piece_counts.others = 1;
+                        break;
+                        /// We found a mating piece. Stop now.
+                    } else if (piece_type === "n") {
+                        piece_counts.knights += 1;
+                    } else if (piece_type === "b") {
+                        piece_counts.bishops += 1;
+                        if ((board.pieces[i].rank + board.pieces[i].file) % 2) {
+                            piece_counts.light_bishops += 1;
+                        }
+                    }
+                }
+            }
+            if (!piece_counts.others && ((!piece_counts.knights && !piece_counts.bishops) || ((piece_counts.knights === 1 && !piece_counts.bishops) ||(!piece_counts.knights && (piece_counts.light_bishops === 0 || (piece_counts.bishops === piece_counts.light_bishops)))))) {
+                return true;
+            }
+        }
+    }
+    
+    function is_stalemate_by_rule(fen, key)
+    {
+        var i,
+            count = 1;
         
         /// Check 50 move rull
         if (fen.half_move_clock > 99) {
@@ -352,32 +391,8 @@
             }
         }
         
-        /// Check insufficient material
-        /// 1. Only Kings
-        /// 2. Kings and one knight
-        /// 3. Kings and any number of bishops on either or one side all of which are on the same color
-        ///NOTE: Could examine the fen position too, but it would take a little more work to determine bishop color.
-        if (board.pieces) {
-            for (i = board.pieces.length - 1; i >= 0; i -= 1) {
-                if (!board.pieces[i].captured) {
-                    piece_type = board.pieces[i].type;
-                    if (piece_type === "p" || piece_type === "r" || piece_type === "q") {
-                        piece_counts.others = 1;
-                        break;
-                        /// We found a mating piece. Stop now.
-                    } else if (piece_type === "n") {
-                        piece_counts.knights += 1;
-                    } else if (piece_type === "b") {
-                        piece_counts.bishops += 1;
-                        if ((board.pieces[i].rank + board.pieces[i].file) % 2) {
-                            piece_counts.light_bishops += 1;
-                        }
-                    }
-                }
-            }
-            if (!piece_counts.others && ((!piece_counts.knights && !piece_counts.bishops) || ((piece_counts.knights === 1 && !piece_counts.bishops) ||(!piece_counts.knights && (piece_counts.light_bishops === 0 || (piece_counts.bishops === piece_counts.light_bishops)))))) {
-                return "material";
-            }
+        if (is_insufficient_material()) {
+            return "material";
         }
     }
     
@@ -417,6 +432,7 @@
                         }
                     }
                     board.wait();
+                    G.events.trigger("gamePaused");
                 }
             }
         });
@@ -428,6 +444,10 @@
             player = board.players[board.turn],
             move,
             ponder;
+        
+        if (board.mode !== "play") {
+            return;
+        }
         
         if (!res) {
             error("Can't get move: " + str);
@@ -456,6 +476,8 @@
         set_ai_position();
         
         set_legal_moves(tell_engine_to_move);
+        
+        G.events.trigger("move");
     }
     
     function onthinking(str)
@@ -485,13 +507,32 @@
     function tell_engine_to_move()
     {
         ///NOTE: Without time, it thinks really fast. So, we give it a something to make it move reasonably quickly.
-        var default_time = 1000 * 60 * 2, /// 2 minutes
+        ///      This time is also tweaked based on the level.
+        var default_time = 1000 * 60, /// 1 minute
             wtime,
             btime,
             depth,
             player = board.players[board.turn];
         
+        if (board.mode !== "play") {
+            return;
+        }
+        
+        function tweak_default_time(player)
+        {
+            var level;
+            
+            if (player.type === "ai") {
+                level = player.engine.level;
+            } else {
+                level = 20;
+            }
+            return default_time + (default_time * (level / 20));
+        }
+        
         if (player.type === "ai") {
+            /// Pause the game if the computer is not ready.
+            ///TODO: Unpause when changed to human.
             if (!player.engine.loaded || !player.engine.ready) {
                 show_loading();
                 return retry_move_timer = setInterval(function onretry()
@@ -503,21 +544,20 @@
                     }
                 }, 100);
             }
+            
             //uciCmd("go " + (time.depth ? "depth " + time.depth : "") + " wtime " + time.wtime + " winc " + time.winc + " btime " + time.btime + " binc " + time.binc);
             
             //engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 1800000 btime 1800000" , onengine_move, onthinking);
             //engine.send("go " + (typeof engine.depth !== "undefined" ? "depth " + engine.depth : "") + " wtime 200000 btime 200000" , onengine_move, onthinking);
             if (board.players.w.time_type === "none") {
-                wtime = default_time;
+                wtime = tweak_default_time(board.players.w);
             } else {
-                ///TODO: Use clock.
                 wtime = board.players.w.time;
                 
             }
             if (board.players.b.time_type === "none") {
-                btime = default_time;
+                btime = tweak_default_time(board.players.b);
             } else {
-                ///TODO: Use clock.
                 btime = board.players.b.time;
             }
             
@@ -541,6 +581,8 @@
         
         ///NOTE: We need to get legal moves (even for AI) because we need to know if a move is castling or not.
         set_legal_moves(tell_engine_to_move);
+        
+        G.events.trigger("move");
     }
     
     function all_ready(cb)
@@ -589,14 +631,23 @@
         all_ready(cb);
     }
     
-    function start_new_game()
+    function reset_clock(color)
     {
-        if (starting_new_game) {
-            return;
+        var player = board.players[color];
+        if (player.time_type !== "none") {
+            player.time = player.start_time;
+            clock_manager.update_clock(player.color)
         }
-        
-        starting_new_game = true;
-        
+    }
+    
+    function reset_clocks()
+    {
+        reset_clock("w");
+        reset_clock("b");
+    }
+    
+    function stop_game()
+    {
         /// Prevent possible future moves.
         clearInterval(retry_move_timer);
         
@@ -609,6 +660,17 @@
             board.players.b.engine.stop_moves();
             board.players.b.engine.send("ucinewgame");
         }
+    }
+    
+    function start_new_game()
+    {
+        if (starting_new_game) {
+            return;
+        }
+        
+        starting_new_game = true;
+        
+        stop_game();
         
         show_loading();
         
@@ -618,6 +680,7 @@
         
         zobrist_keys = [];
         stalemate_by_rules = null;
+        pieces_moved = false;
         
         evaler.send("ucinewgame");
         
@@ -628,6 +691,7 @@
             //board.moves = "e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d4 e5d4 e1g1 f6e4 f1e1 d7d5 c4d5 d8d5 b1c3 d5c4 c3e4 c8e6 b2b3 c4d5 c1g5 f8b4 c2c3 f7f5 e4d6 b4d6 c3c4 d5c5 d1e2 e8g8 e2e6 g8h8 a1d1 f5f4 e1e4 c5a5 e4e2 a5f5 e6f5 f8f5 g5h4 a8f8 d1d3 h7h6 f3d4 c6d4 d3d4 g7g5 h4g5 h6g5 g1f1 g5g4 f2f3 g4f3 g2f3 h8g7 a2a4 f8h8 f1g2 g7f6 g2h1 h8h3 d4d3 d6c5 e2b2 f5g5 b2b1 a7a5 b1f1 c5e3 f1e1 h3f3 d3d8 g5h5 d8g8 f3h3 e1e2 e3c5".split(" ");
             set_legal_moves(function onset()
             {
+                reset_clocks();
                 starting_new_game = false;
                 hide_loading();
                 tell_engine_to_move();
@@ -828,6 +892,9 @@
                 player.set_sd_time();
             } else {
                 player.els.sd_container.style.display = "none";
+                player.time = "";
+                player.start_time = "";
+                clock_manager.clear(player.color);
             }
         }
         
@@ -845,12 +912,19 @@
     {
         function set_sd_time(time)
         {
+            var time_val;
+            
             if (typeof time === "undefined") {
                 time = player.els.sd.value;
             }
             
-            player.time = time_from_str(time);
-            ///TODO: Start clock.
+            time_val = time_from_str(time);
+            
+            if (time_val !== player.start_time) {
+                player.time = time_val;
+                player.start_time = time_val;
+                clock_manager.update_clock(player.color)
+            }
         }
         
         function onchange()
@@ -943,9 +1017,9 @@
     function create_players()
     {
         player1_el.classList.add("player");
-        player1_el.classList.add("left_player");
+        player1_el.classList.add("player_white");
         player2_el.classList.add("player");
-        player2_el.classList.add("right_player");
+        player2_el.classList.add("player_black");
         
         board.players.w.level = 0;
         board.players.b.level = 0;
@@ -967,6 +1041,7 @@
     {
         loading_el.classList.add("hidden");
         board.play();
+        G.events.trigger("gameUnpaused");
     }
     
     function show_loading()
@@ -980,6 +1055,7 @@
         }
         
         board.wait();
+        G.events.trigger("gamePaused");
     }
     
     function init()
@@ -1026,6 +1102,136 @@
             start_new_game();
         }
     });
+    
+    G.events.attach("move", function onmove()
+    {
+        if (!pieces_moved) {
+            G.events.trigger("firstMove");
+            pieces_moved = true;
+        }
+    });
+    
+    
+    clock_manager = (function make_clocks()
+    {
+        var last_time,
+            tick_timer,
+            clock_els = {
+                w: G.cde("div", {c: "clock clock_white"}),
+                b: G.cde("div", {c: "clock clock_black"}),
+            },
+            
+            clock_manager = {},
+            timer_on;
+        
+        function tick(color)
+        {
+            var now = Date.now(),
+                diff,
+                player = board.players[color || board.turn];
+            
+            diff = now - last_time;
+            last_time = now;
+            
+            if (player.time_type !== "none") {
+                player.time -= diff;
+                update_clock(player.color);
+                if (player.time < 0) {
+                    if (is_insufficient_material(player.color === "w" ? "b" : "w")) {
+                        alert("Stalemate: Player with time has insufficient material");
+                    } else {
+                        alert((player.color === "w" ? "White" : "Black") + " loses on time.");
+                    }
+                    stop_game();
+                    board.wait();
+                    G.events.trigger("gamePaused");
+                }
+            }
+        }
+        
+        function start_timer()
+        {
+            /// Don't start the timer if the game has not yet begun.
+            if (board.messy) {
+                last_time = Date.now();
+                tick_timer = setInterval(tick, 50);
+                timer_on = true;
+            }
+        }
+        
+        function stop_timer()
+        {
+            clearInterval(tick_timer);
+            timer_on = false;
+        }
+        
+        function format_time(time)
+        {
+            var sign = "",
+                res,
+                sec,
+                min,
+                hour,
+                day;
+            
+            time = parseFloat(time);
+            //console.log(time);
+            if (time < 0) {
+                sign = "-"
+            }
+            time = Math.abs(time);
+            
+            if (time < 10000) { /// Less than 10 sec
+                res = (time / 1000).toFixed(3); /// Show decimal
+            } else if (time < 60000) { /// Less than 1 minute
+                /// Always floor since we don't want to round to 60.
+                res = Math.floor(time / 1000);
+            } else if (time < 3600000) { /// Less than 1 hour
+                //debugger;
+                /// Always floor since we don't want to round to 60.
+                sec = Math.floor((time % 60000) / 1000);
+                min = Math.floor(time / 60000);
+                if (sec < 10) {
+                    sec = "0" + sec;
+                }
+                res = min + ":" + sec;
+            }
+            
+            return sign + res;
+        }
+        
+        function update_clock(color)
+        {
+            clock_els[color].textContent = format_time(board.players[color].time);
+        }
+        
+        board.onswitch = function onswitch()
+        {
+            if (timer_on) {
+                tick(board.turn === "w" ? "b" : "w");
+            }
+        }
+        
+        board.el.parentNode.insertBefore(clock_els.w, board.el);
+        board.el.parentNode.insertBefore(clock_els.b, board.el.nextSibling);
+        
+        G.events.attach("gameUnpaused", start_timer);
+        G.events.attach("firstMove", start_timer);
+        G.events.attach("gamePaused", stop_timer);
+        
+        clock_manager.clock_els = clock_els;
+        
+        clock_manager.update_clock = update_clock;
+        
+        clock_manager.clear = function clear(color)
+        {
+            if (clock_els[color]) {
+                clock_els[color].textContent = "";
+            }
+        }
+        
+        return clock_manager;
+    }());
     
     init();
 }());

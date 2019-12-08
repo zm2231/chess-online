@@ -107,6 +107,9 @@ var BOARD = function board_init(el, options)
         } else {
             board.turn = "w";
         }
+        if (board.onswitch) {
+            board.onswitch();
+        }
     }
     
     function create_board(el, dim)
@@ -633,8 +636,12 @@ var BOARD = function board_init(el, options)
         play: play,
         move: move,
         players: {
-            w: {},
-            b: {}
+            w: {
+                color: "w",
+            },
+            b: {
+                color: "b",
+            }
         },
         switch_turn: switch_turn,
         set_board: set_board,
@@ -642,6 +649,7 @@ var BOARD = function board_init(el, options)
         moves: []
     /// legal_move[]
     /// onmove()
+    /// onswitch()
     };
     
     options = options || {};
